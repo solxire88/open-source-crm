@@ -1,0 +1,2 @@
+-- Intentionally minimal seed for a clean local reset.
+-- Use `npm run seed` for optional demo org/users/tables/leads.

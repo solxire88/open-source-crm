@@ -1,0 +1,22 @@
+# v0 runtime files (should only exist in preview, not in git)
+__v0_runtime_loader.js
+__v0_devtools.tsx
+__v0_jsx-dev-runtime.ts
+
+# Common ignores
+node_modules/
+.next/
+.env
+.env.*
+!.env.example
+.env*.local
+.env.local
+.DS_Store
+dist/
+coverage/
+
+# Supabase local/dev artifacts
+supabase/.branches/
+supabase/.temp/
+supabase/.functions/
+supabase/.logs/

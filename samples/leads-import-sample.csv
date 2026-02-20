@@ -1,0 +1,12 @@
+business_name,stage,contact,website_url,notes,source_type,source_detail,owner_id,next_followup_at,do_not_contact,dnc_reason,lost_reason
+Blue Harbor Cafe,New,+1-555-0101,https://blueharborcafe.com,Instagram lead from reels,Instagram,IG Reel campaign,,,false,,
+Sunset Dental,Contacted,dr.smith@sunsetdental.com,https://sunsetdental.com,Spoke with office manager,Referral,Dr Smith referral,,2026-03-01,false,,
+Northwind Logistics,Lost,ops@northwindlogistics.io,https://northwindlogistics.io,Budget mismatch,Website,Inbound form,,,false,,Price too high
+Acme Fitness,New,,https://acmefitness.co,Need contact lookup,Scraping,Apollo scrape,,,false,,
+Greenleaf Spa,Contacted,+1-555-0199,greenleafspa.com,Requested callback,Meta Ads,Retargeting ad,,2026-02-28,false,,
+Urban Pet Clinic,Won,owner@urbanpetclinic.com,https://urbanpetclinic.com,Closed annual package,Referral,Existing client intro,,,false,,
+Maple Realty Group,New,@maplerealty,https://maplerealtygroup.com,DM outreach target,Instagram,Local hashtag search,,,false,,
+Oak and Iron Studio,Meeting,sales@oakironstudio.com,https://oakironstudio.com,Meeting booked for next week,Website,Pricing page inquiry,,2026-03-03,false,,
+Silverline Auto,Replied,+1-555-0144,https://silverlineauto.net,Asked for proposal,Meta Ads,Lead form,,,false,,
+Harbor Tech Works,Contacted,hello@harbortechworks.dev,https://harbortechworks.dev,Needs follow-up on integration,Other,Partner intro,,2026-03-05,false,,
+Quiet Corner Bakery,New,+1-555-0177,https://quietcornerbakery.com,Requested no outreach,Other,Walk-in list,,,true,Owner requested no contact,
