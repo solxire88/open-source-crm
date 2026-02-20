@@ -41,6 +41,7 @@ export const apiFetch = async <T>(
 
   const response = await fetch(input, {
     ...init,
+    credentials: init?.credentials ?? 'include',
     headers: {
       ...(init?.body && !isFormDataBody ? { 'Content-Type': 'application/json' } : {}),
       ...(init?.headers ?? {}),

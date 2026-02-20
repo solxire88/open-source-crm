@@ -9,6 +9,7 @@ import React, {
   useRef,
   useState,
 } from "react"
+import { toast } from "sonner"
 import type {
   AccessLevel,
   Attachment,
@@ -88,6 +89,7 @@ interface StoreContextValue {
   // Leads
   leads: Lead[]
   updateLead: (id: string, updates: Partial<Lead>) => void
+  saveLead: (id: string, updates: Partial<Lead>) => Promise<void>
   addLead: (lead: Lead) => Promise<void>
   claimLead: (leadId: string, ownerId?: string) => Promise<void>
   logTouchLead: (leadId: string, note?: string) => Promise<void>
@@ -132,6 +134,17 @@ const toDateOnly = (value: string | null | undefined) => {
   return date.toISOString().slice(0, 10)
 }
 
+const canSetContactedStage = (lead: Partial<Lead>) => {
+  if (lead.stage !== "Contacted") {
+    return true
+  }
+
+  const hasContact = typeof lead.contact === "string" && lead.contact.trim().length > 0
+  const hasFollowUp = toDateOnly(lead.nextFollowUpAt ?? null) !== null
+
+  return hasContact && hasFollowUp
+}
+
 const createLeadPayload = (lead: Lead) => ({
   business_name: lead.businessName,
   stage: lead.stage,
@@ -158,7 +171,13 @@ const createLeadPatchPayload = (updates: Partial<Lead>) => {
   if ("ownerId" in updates) payload.owner_id = updates.ownerId ?? null
   if ("nextFollowUpAt" in updates) payload.next_followup_at = toDateOnly(updates.nextFollowUpAt ?? null)
   if ("followUpWindow" in updates) payload.followup_window = updates.followUpWindow
-  if ("contact" in updates) payload.contact = updates.contact ?? null
+  if ("contact" in updates) {
+    const normalizedContact =
+      typeof updates.contact === "string" ? updates.contact.trim() : ""
+    if (normalizedContact.length > 0) {
+      payload.contact = normalizedContact
+    }
+  }
   if ("websiteUrl" in updates) payload.website_url = updates.websiteUrl ?? null
   if ("notes" in updates) payload.notes = updates.notes ?? null
   if ("sourceType" in updates) payload.source_type = updates.sourceType
@@ -617,7 +636,12 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
       const mapped = toLead(response.item, serviceIds)
       setLeads((prev) => prev.map((lead) => (lead.id === leadId ? mapped : lead)))
     } catch (error) {
-      console.error(error)
+      if (error instanceof ApiClientError) {
+        toast.error(error.message)
+      } else {
+        console.error(error)
+        toast.error("Failed to update lead")
+      }
       try {
         const reloaded = await apiFetch<{
           item: {
@@ -665,10 +689,49 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
 
   const updateLead = useCallback(
     (id: string, updates: Partial<Lead>) => {
-      setLeads((prev) => prev.map((lead) => (lead.id === id ? { ...lead, ...updates } : lead)))
+      const preparedUpdates: Partial<Lead> = { ...updates }
+      const outcome = {
+        current: "missing" as "applied" | "blocked_contacted" | "missing",
+      }
+      setLeads((prev) =>
+        prev.map((lead) => {
+          if (lead.id !== id) {
+            return lead
+          }
+
+          const nextLead = { ...lead, ...updates }
+          if (!canSetContactedStage(nextLead)) {
+            outcome.current = "blocked_contacted"
+            return lead
+          }
+
+          if (preparedUpdates.stage !== undefined && preparedUpdates.contact === undefined) {
+            preparedUpdates.contact = nextLead.contact
+          }
+
+          if (nextLead.stage === "Contacted") {
+            if (preparedUpdates.contact === undefined) {
+              preparedUpdates.contact = nextLead.contact
+            }
+            if (preparedUpdates.nextFollowUpAt === undefined) {
+              preparedUpdates.nextFollowUpAt = nextLead.nextFollowUpAt
+            }
+          }
+
+          outcome.current = "applied"
+          return nextLead
+        }),
+      )
+
+      if (outcome.current !== "applied") {
+        if (outcome.current === "blocked_contacted") {
+          toast.error("Contact and next follow-up are required before setting stage to Contacted")
+        }
+        return
+      }
 
       const existing = leadPatchQueueRef.current.get(id) ?? {}
-      leadPatchQueueRef.current.set(id, { ...existing, ...updates })
+      leadPatchQueueRef.current.set(id, { ...existing, ...preparedUpdates })
 
       const previousTimer = leadPatchTimersRef.current.get(id)
       if (previousTimer) {
@@ -682,6 +745,80 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
     },
     [flushLeadUpdate],
   )
+
+  const saveLead = useCallback(async (id: string, updates: Partial<Lead>) => {
+    const timer = leadPatchTimersRef.current.get(id)
+    if (timer) {
+      clearTimeout(timer)
+      leadPatchTimersRef.current.delete(id)
+    }
+    leadPatchQueueRef.current.delete(id)
+
+    const preparedUpdates: Partial<Lead> = { ...updates }
+    const currentLead = leads.find((lead) => lead.id === id)
+
+    if (preparedUpdates.stage !== undefined && preparedUpdates.contact === undefined) {
+      preparedUpdates.contact = currentLead?.contact ?? ""
+    }
+
+    if (preparedUpdates.stage === "Contacted") {
+      const nextContact =
+        preparedUpdates.contact !== undefined ? preparedUpdates.contact : currentLead?.contact ?? ""
+      const nextFollowUp =
+        preparedUpdates.nextFollowUpAt !== undefined
+          ? preparedUpdates.nextFollowUpAt
+          : currentLead?.nextFollowUpAt ?? null
+
+      if (!nextContact.trim() || !toDateOnly(nextFollowUp)) {
+        throw new Error("Contact and next follow-up are required when stage is Contacted")
+      }
+
+      if (preparedUpdates.contact === undefined) {
+        preparedUpdates.contact = nextContact
+      }
+      if (preparedUpdates.nextFollowUpAt === undefined) {
+        preparedUpdates.nextFollowUpAt = nextFollowUp
+      }
+    }
+
+    const payload = createLeadPatchPayload(preparedUpdates)
+    if (Object.keys(payload).length === 0) {
+      return
+    }
+
+    const response = await apiFetch<{
+      item: {
+        id: string
+        table_id: string
+        business_name: string
+        stage: Lead["stage"]
+        owner_id: string | null
+        next_followup_at: string | null
+        followup_window: Lead["followUpWindow"]
+        contact: string | null
+        website_url: string | null
+        notes: string | null
+        source_type: Lead["sourceType"]
+        source_detail: string | null
+        last_touched_at: string | null
+        do_not_contact: boolean
+        dnc_reason: string | null
+        lost_reason: string | null
+        is_archived: boolean
+        stage_changed_at: string
+        created_at: string
+      }
+    }>(`/api/leads/${id}`, {
+      method: "PATCH",
+      body: JSON.stringify(payload),
+    })
+
+    const serviceIds =
+      "interestedServices" in preparedUpdates ? preparedUpdates.interestedServices : undefined
+
+    const mapped = toLead(response.item, serviceIds)
+    setLeads((prev) => prev.map((lead) => (lead.id === id ? mapped : lead)))
+  }, [leads])
 
   const addLead = useCallback(async (lead: Lead) => {
     const response = await apiFetch<{
@@ -1083,6 +1220,7 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
     getPermittedTables,
     leads,
     updateLead,
+    saveLead,
     addLead,
     claimLead,
     logTouchLead,

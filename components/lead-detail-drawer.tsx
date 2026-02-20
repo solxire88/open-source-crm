@@ -45,6 +45,17 @@ import {
   CollapsibleContent,
   CollapsibleTrigger,
 } from "@/components/ui/collapsible"
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+  AlertDialogTrigger,
+} from "@/components/ui/alert-dialog"
 import { cn } from "@/lib/utils"
 
 interface LeadDetailDrawerProps {
@@ -54,10 +65,60 @@ interface LeadDetailDrawerProps {
   tableId: string
 }
 
+type LeadDraft = Pick<
+  Lead,
+  | "stage"
+  | "ownerId"
+  | "nextFollowUpAt"
+  | "followUpWindow"
+  | "contact"
+  | "sourceType"
+  | "sourceDetail"
+  | "interestedServices"
+  | "doNotContact"
+  | "dncReason"
+  | "lostReason"
+  | "websiteUrl"
+  | "notes"
+>
+
+const toLeadDraft = (lead: Lead): LeadDraft => ({
+  stage: lead.stage,
+  ownerId: lead.ownerId,
+  nextFollowUpAt: lead.nextFollowUpAt,
+  followUpWindow: lead.followUpWindow,
+  contact: lead.contact,
+  sourceType: lead.sourceType,
+  sourceDetail: lead.sourceDetail,
+  interestedServices: [...lead.interestedServices],
+  doNotContact: lead.doNotContact,
+  dncReason: lead.dncReason,
+  lostReason: lead.lostReason,
+  websiteUrl: lead.websiteUrl,
+  notes: lead.notes,
+})
+
+const toDateInputValue = (value: string | null) => {
+  if (!value) return ""
+  if (/^\d{4}-\d{2}-\d{2}$/.test(value)) return value
+
+  const parsed = new Date(value)
+  if (Number.isNaN(parsed.getTime())) return ""
+  return format(parsed, "yyyy-MM-dd")
+}
+
+const sameStringList = (left: string[], right: string[]) => {
+  if (left.length !== right.length) return false
+  const leftSorted = [...left].sort()
+  const rightSorted = [...right].sort()
+  return leftSorted.every((value, index) => value === rightSorted[index])
+}
+
 export function LeadDetailDrawer({ leadId, open, onOpenChange, tableId }: LeadDetailDrawerProps) {
   const {
     leads,
-    updateLead,
+    saveLead,
+    archiveLead,
     currentUser,
     allUsers,
     services,
@@ -77,7 +138,12 @@ export function LeadDetailDrawer({ leadId, open, onOpenChange, tableId }: LeadDe
   const access = getAccess(tableId)
   const canEdit = access === "edit"
   const isAdmin = currentUser.role === "admin"
+  const canWrite = canEdit || isAdmin
   const [historyOpen, setHistoryOpen] = useState(false)
+  const [isSaving, setIsSaving] = useState(false)
+  const [isDeleting, setIsDeleting] = useState(false)
+  const [draft, setDraft] = useState<LeadDraft | null>(null)
+  const initializedLeadIdRef = useRef<string | null>(null)
   const fileInputRef = useRef<HTMLInputElement | null>(null)
 
   useEffect(() => {
@@ -85,16 +151,97 @@ export function LeadDetailDrawer({ leadId, open, onOpenChange, tableId }: LeadDe
     void loadLeadArtifacts(leadId)
   }, [leadId, loadLeadArtifacts, open])
 
-  if (!lead) return null
+  useEffect(() => {
+    if (!open) {
+      initializedLeadIdRef.current = null
+      setDraft(null)
+      return
+    }
+
+    if (!lead || !leadId) return
+
+    if (initializedLeadIdRef.current !== leadId) {
+      setDraft(toLeadDraft(lead))
+      initializedLeadIdRef.current = leadId
+    }
+  }, [open, leadId, lead])
+
+  if (!lead || !draft) return null
 
   const daysSinceStageChange = lead.stageChangedAt
     ? formatDistanceToNow(new Date(lead.stageChangedAt), { addSuffix: false })
     : "unknown"
 
-  const handleUpdate = (updates: Partial<Lead>) => {
-    if (!canEdit && !isAdmin) return
-    updateLead(lead.id, updates)
-    toast.success("Lead updated")
+  const normalizedDraftContact = draft.contact.trim()
+  const normalizedDraftWebsite = draft.websiteUrl.trim()
+  const normalizedDraftFollowUp = draft.nextFollowUpAt
+    ? toDateInputValue(draft.nextFollowUpAt)
+    : null
+
+  const hasUnsavedChanges =
+    lead.stage !== draft.stage ||
+    lead.ownerId !== draft.ownerId ||
+    toDateInputValue(lead.nextFollowUpAt) !== normalizedDraftFollowUp ||
+    lead.followUpWindow !== draft.followUpWindow ||
+    lead.contact !== normalizedDraftContact ||
+    lead.sourceType !== draft.sourceType ||
+    lead.sourceDetail !== draft.sourceDetail ||
+    !sameStringList(lead.interestedServices, draft.interestedServices) ||
+    lead.doNotContact !== draft.doNotContact ||
+    lead.dncReason !== draft.dncReason ||
+    lead.lostReason !== draft.lostReason ||
+    lead.websiteUrl !== normalizedDraftWebsite ||
+    lead.notes !== draft.notes
+
+  const handleSave = async () => {
+    if (!canWrite || !hasUnsavedChanges || isSaving) return
+
+    if (draft.stage === "Contacted") {
+      const missing: string[] = []
+      if (!normalizedDraftContact) missing.push("contact")
+      if (!normalizedDraftFollowUp) missing.push("next follow-up")
+
+      if (missing.length > 0) {
+        toast.error(`Contacted stage requires ${missing.join(" and ")}`)
+        return
+      }
+    }
+
+    const updates: Partial<Lead> = {}
+
+    if (lead.stage !== draft.stage) {
+      updates.stage = draft.stage
+      updates.stageChangedAt = new Date().toISOString()
+    }
+    if (lead.ownerId !== draft.ownerId) updates.ownerId = draft.ownerId
+    if (toDateInputValue(lead.nextFollowUpAt) !== normalizedDraftFollowUp) {
+      updates.nextFollowUpAt = normalizedDraftFollowUp
+    }
+    if (lead.followUpWindow !== draft.followUpWindow) updates.followUpWindow = draft.followUpWindow
+    if (lead.contact !== normalizedDraftContact) updates.contact = normalizedDraftContact
+    if (lead.sourceType !== draft.sourceType) updates.sourceType = draft.sourceType
+    if (lead.sourceDetail !== draft.sourceDetail) updates.sourceDetail = draft.sourceDetail
+    if (!sameStringList(lead.interestedServices, draft.interestedServices)) {
+      updates.interestedServices = draft.interestedServices
+    }
+    if (lead.doNotContact !== draft.doNotContact) updates.doNotContact = draft.doNotContact
+    if (lead.dncReason !== draft.dncReason) updates.dncReason = draft.dncReason
+    if (lead.lostReason !== draft.lostReason) updates.lostReason = draft.lostReason
+    if (lead.websiteUrl !== normalizedDraftWebsite) updates.websiteUrl = normalizedDraftWebsite
+    if (lead.notes !== draft.notes) updates.notes = draft.notes
+
+    if (Object.keys(updates).length === 0) return
+
+    try {
+      setIsSaving(true)
+      await saveLead(lead.id, updates)
+      toast.success("Lead saved")
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Failed to save lead"
+      toast.error(message)
+    } finally {
+      setIsSaving(false)
+    }
   }
 
   const appendNote = async (text: string) => {
@@ -107,15 +254,31 @@ export function LeadDetailDrawer({ leadId, open, onOpenChange, tableId }: LeadDe
     }
   }
 
+  const handleDeleteLead = async () => {
+    if (!canWrite || isDeleting) return
+
+    try {
+      setIsDeleting(true)
+      await archiveLead(lead.id)
+      toast.success("Lead deleted")
+      onOpenChange(false)
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Failed to delete lead"
+      toast.error(message)
+    } finally {
+      setIsDeleting(false)
+    }
+  }
+
   const copyToClipboard = (text: string) => {
     navigator.clipboard.writeText(text)
     toast.success("Copied to clipboard")
   }
 
   // Parse contact for action buttons
-  const hasEmail = lead.contact.includes("@") && !lead.contact.startsWith("@")
-  const hasPhone = /\+?\d[\d\s-]{6,}/.test(lead.contact)
-  const hasIG = lead.contact.startsWith("@") || lead.contact.includes("instagram")
+  const hasEmail = draft.contact.includes("@") && !draft.contact.startsWith("@")
+  const hasPhone = /\+?\d[\d\s-]{6,}/.test(draft.contact)
+  const hasIG = draft.contact.startsWith("@") || draft.contact.includes("instagram")
 
   return (
     <Sheet open={open} onOpenChange={onOpenChange}>
@@ -126,15 +289,15 @@ export function LeadDetailDrawer({ leadId, open, onOpenChange, tableId }: LeadDe
               <SheetTitle className="text-lg truncate">{lead.businessName}</SheetTitle>
               <SheetDescription asChild>
                 <div className="flex items-center gap-2 mt-1 flex-wrap">
-                  <StageBadge stage={lead.stage} />
-                  {lead.doNotContact && (
+                  <StageBadge stage={draft.stage} />
+                  {draft.doNotContact && (
                     <Badge variant="destructive" className="text-xs">DNC</Badge>
                   )}
                   {lead.isArchived && (
                     <Badge variant="secondary" className="text-xs">Archived</Badge>
                   )}
                   <span className="text-xs text-muted-foreground">
-                    {daysSinceStageChange} in {lead.stage}
+                    {daysSinceStageChange} in {draft.stage}
                   </span>
                 </div>
               </SheetDescription>
@@ -152,7 +315,7 @@ export function LeadDetailDrawer({ leadId, open, onOpenChange, tableId }: LeadDe
                   size="sm"
                   className="gap-1.5 text-xs"
                   onClick={() => {
-                    const handle = lead.contact.replace("@", "")
+                    const handle = draft.contact.replace("@", "")
                     window.open(`https://instagram.com/${handle}`, "_blank")
                     void appendNote("IG DM sent")
                   }}
@@ -167,7 +330,7 @@ export function LeadDetailDrawer({ leadId, open, onOpenChange, tableId }: LeadDe
                     size="sm"
                     className="gap-1.5 text-xs"
                     onClick={() => {
-                      window.open(`https://wa.me/${lead.contact.replace(/\D/g, "")}`, "_blank")
+                      window.open(`https://wa.me/${draft.contact.replace(/\D/g, "")}`, "_blank")
                       void appendNote("WhatsApp sent")
                     }}
                   >
@@ -178,7 +341,7 @@ export function LeadDetailDrawer({ leadId, open, onOpenChange, tableId }: LeadDe
                     size="sm"
                     className="gap-1.5 text-xs"
                     onClick={() => {
-                      window.open(`tel:${lead.contact}`, "_blank")
+                      window.open(`tel:${draft.contact}`, "_blank")
                       void appendNote("Called")
                     }}
                   >
@@ -192,31 +355,31 @@ export function LeadDetailDrawer({ leadId, open, onOpenChange, tableId }: LeadDe
                   size="sm"
                   className="gap-1.5 text-xs"
                   onClick={() => {
-                    window.open(`mailto:${lead.contact}`, "_blank")
+                    window.open(`mailto:${draft.contact}`, "_blank")
                     void appendNote("Email sent")
                   }}
                 >
                   <Mail className="h-3.5 w-3.5" /> Email
                 </Button>
               )}
-              {lead.websiteUrl && (
+              {draft.websiteUrl && (
                 <Button
                   variant="outline"
                   size="sm"
                   className="gap-1.5 text-xs"
                   asChild
                 >
-                  <a href={lead.websiteUrl} target="_blank" rel="noopener noreferrer">
+                  <a href={draft.websiteUrl} target="_blank" rel="noopener noreferrer">
                     <Globe className="h-3.5 w-3.5" /> Website
                   </a>
                 </Button>
               )}
-              {lead.contact && (
+              {draft.contact && (
                 <Button
                   variant="ghost"
                   size="sm"
                   className="gap-1.5 text-xs"
-                  onClick={() => copyToClipboard(lead.contact)}
+                  onClick={() => copyToClipboard(draft.contact)}
                 >
                   <Copy className="h-3.5 w-3.5" /> Copy contact
                 </Button>
@@ -231,12 +394,18 @@ export function LeadDetailDrawer({ leadId, open, onOpenChange, tableId }: LeadDe
               <div className="grid gap-1.5">
                 <Label className="text-xs text-muted-foreground">Stage</Label>
                 <Select
-                  value={lead.stage}
-                  onValueChange={(v) => handleUpdate({
-                    stage: v as Stage,
-                    stageChangedAt: new Date().toISOString(),
-                  })}
-                  disabled={!canEdit && !isAdmin}
+                  value={draft.stage}
+                  onValueChange={(v) =>
+                    setDraft((prev) =>
+                      prev
+                        ? {
+                            ...prev,
+                            stage: v as Stage,
+                          }
+                        : prev,
+                    )
+                  }
+                  disabled={!canWrite}
                 >
                   <SelectTrigger className="h-8 text-sm">
                     <SelectValue />
@@ -253,9 +422,18 @@ export function LeadDetailDrawer({ leadId, open, onOpenChange, tableId }: LeadDe
               <div className="grid gap-1.5">
                 <Label className="text-xs text-muted-foreground">Owner</Label>
                 <Select
-                  value={lead.ownerId ?? "unassigned"}
-                  onValueChange={(v) => handleUpdate({ ownerId: v === "unassigned" ? null : v })}
-                  disabled={!canEdit && !isAdmin}
+                  value={draft.ownerId ?? "unassigned"}
+                  onValueChange={(v) =>
+                    setDraft((prev) =>
+                      prev
+                        ? {
+                            ...prev,
+                            ownerId: v === "unassigned" ? null : v,
+                          }
+                        : prev,
+                    )
+                  }
+                  disabled={!canWrite}
                 >
                   <SelectTrigger className="h-8 text-sm">
                     <SelectValue />
@@ -275,9 +453,18 @@ export function LeadDetailDrawer({ leadId, open, onOpenChange, tableId }: LeadDe
                 <Input
                   type="date"
                   className="h-8 text-sm"
-                  value={lead.nextFollowUpAt ? format(new Date(lead.nextFollowUpAt), "yyyy-MM-dd") : ""}
-                  onChange={(e) => handleUpdate({ nextFollowUpAt: e.target.value ? new Date(e.target.value).toISOString() : null })}
-                  disabled={!canEdit && !isAdmin}
+                  value={toDateInputValue(draft.nextFollowUpAt)}
+                  onChange={(e) =>
+                    setDraft((prev) =>
+                      prev
+                        ? {
+                            ...prev,
+                            nextFollowUpAt: e.target.value || null,
+                          }
+                        : prev,
+                    )
+                  }
+                  disabled={!canWrite}
                 />
               </div>
 
@@ -285,9 +472,18 @@ export function LeadDetailDrawer({ leadId, open, onOpenChange, tableId }: LeadDe
               <div className="grid gap-1.5">
                 <Label className="text-xs text-muted-foreground">Follow-up window</Label>
                 <Select
-                  value={lead.followUpWindow}
-                  onValueChange={(v) => handleUpdate({ followUpWindow: v as FollowUpWindow })}
-                  disabled={!canEdit && !isAdmin}
+                  value={draft.followUpWindow}
+                  onValueChange={(v) =>
+                    setDraft((prev) =>
+                      prev
+                        ? {
+                            ...prev,
+                            followUpWindow: v as FollowUpWindow,
+                          }
+                        : prev,
+                    )
+                  }
+                  disabled={!canWrite}
                 >
                   <SelectTrigger className="h-8 text-sm">
                     <SelectValue />
@@ -305,9 +501,18 @@ export function LeadDetailDrawer({ leadId, open, onOpenChange, tableId }: LeadDe
                 <Label className="text-xs text-muted-foreground">Contact</Label>
                 <Input
                   className="h-8 text-sm"
-                  value={lead.contact}
-                  onChange={(e) => handleUpdate({ contact: e.target.value.trim() })}
-                  disabled={!canEdit && !isAdmin}
+                  value={draft.contact}
+                  onChange={(e) =>
+                    setDraft((prev) =>
+                      prev
+                        ? {
+                            ...prev,
+                            contact: e.target.value,
+                          }
+                        : prev,
+                    )
+                  }
+                  disabled={!canWrite}
                   placeholder="Phone, email, or IG handle"
                 />
               </div>
@@ -317,9 +522,18 @@ export function LeadDetailDrawer({ leadId, open, onOpenChange, tableId }: LeadDe
                 <div className="grid gap-1.5">
                   <Label className="text-xs text-muted-foreground">Source type</Label>
                   <Select
-                    value={lead.sourceType}
-                    onValueChange={(v) => handleUpdate({ sourceType: v as SourceType })}
-                    disabled={!canEdit && !isAdmin}
+                    value={draft.sourceType}
+                    onValueChange={(v) =>
+                      setDraft((prev) =>
+                        prev
+                          ? {
+                              ...prev,
+                              sourceType: v as SourceType,
+                            }
+                          : prev,
+                      )
+                    }
+                    disabled={!canWrite}
                   >
                     <SelectTrigger className="h-8 text-sm">
                       <SelectValue />
@@ -335,9 +549,18 @@ export function LeadDetailDrawer({ leadId, open, onOpenChange, tableId }: LeadDe
                   <Label className="text-xs text-muted-foreground">Source detail</Label>
                   <Input
                     className="h-8 text-sm"
-                    value={lead.sourceDetail}
-                    onChange={(e) => handleUpdate({ sourceDetail: e.target.value })}
-                    disabled={!canEdit && !isAdmin}
+                    value={draft.sourceDetail}
+                    onChange={(e) =>
+                      setDraft((prev) =>
+                        prev
+                          ? {
+                              ...prev,
+                              sourceDetail: e.target.value,
+                            }
+                          : prev,
+                      )
+                    }
+                    disabled={!canWrite}
                     placeholder="Optional"
                   />
                 </div>
@@ -348,21 +571,28 @@ export function LeadDetailDrawer({ leadId, open, onOpenChange, tableId }: LeadDe
                 <Label className="text-xs text-muted-foreground">Interested services</Label>
                 <div className="flex flex-wrap gap-1.5">
                   {tableServices.map((s) => {
-                    const selected = lead.interestedServices.includes(s.id)
+                    const selected = draft.interestedServices.includes(s.id)
                     return (
                       <Badge
                         key={s.id}
                         variant={selected ? "default" : "outline"}
                         className={cn(
                           "cursor-pointer text-xs transition-colors",
-                          !canEdit && !isAdmin && "pointer-events-none opacity-60"
+                          !canWrite && "pointer-events-none opacity-60"
                         )}
                         onClick={() => {
-                          if (!canEdit && !isAdmin) return
+                          if (!canWrite) return
                           const updated = selected
-                            ? lead.interestedServices.filter((id) => id !== s.id)
-                            : [...lead.interestedServices, s.id]
-                          handleUpdate({ interestedServices: updated })
+                            ? draft.interestedServices.filter((id) => id !== s.id)
+                            : [...draft.interestedServices, s.id]
+                          setDraft((prev) =>
+                            prev
+                              ? {
+                                  ...prev,
+                                  interestedServices: updated,
+                                }
+                              : prev,
+                          )
                         }}
                       >
                         {s.name}
@@ -382,33 +612,60 @@ export function LeadDetailDrawer({ leadId, open, onOpenChange, tableId }: LeadDe
                   <p className="text-xs text-muted-foreground">Lead will be hidden from active lists</p>
                 </div>
                 <Switch
-                  checked={lead.doNotContact}
-                  onCheckedChange={(checked) => handleUpdate({ doNotContact: checked })}
-                  disabled={!canEdit && !isAdmin}
+                  checked={draft.doNotContact}
+                  onCheckedChange={(checked) =>
+                    setDraft((prev) =>
+                      prev
+                        ? {
+                            ...prev,
+                            doNotContact: checked,
+                          }
+                        : prev,
+                    )
+                  }
+                  disabled={!canWrite}
                 />
               </div>
 
-              {lead.doNotContact && (
+              {draft.doNotContact && (
                 <div className="grid gap-1.5">
                   <Label className="text-xs text-muted-foreground">DNC reason</Label>
                   <Input
                     className="h-8 text-sm"
-                    value={lead.dncReason}
-                    onChange={(e) => handleUpdate({ dncReason: e.target.value })}
-                    disabled={!canEdit && !isAdmin}
+                    value={draft.dncReason}
+                    onChange={(e) =>
+                      setDraft((prev) =>
+                        prev
+                          ? {
+                              ...prev,
+                              dncReason: e.target.value,
+                            }
+                          : prev,
+                      )
+                    }
+                    disabled={!canWrite}
                   />
                 </div>
               )}
 
               {/* Lost reason */}
-              {lead.stage === "Lost" && (
+              {draft.stage === "Lost" && (
                 <div className="grid gap-1.5">
                   <Label className="text-xs text-muted-foreground">Lost reason</Label>
                   <Input
                     className="h-8 text-sm"
-                    value={lead.lostReason}
-                    onChange={(e) => handleUpdate({ lostReason: e.target.value })}
-                    disabled={!canEdit && !isAdmin}
+                    value={draft.lostReason}
+                    onChange={(e) =>
+                      setDraft((prev) =>
+                        prev
+                          ? {
+                              ...prev,
+                              lostReason: e.target.value,
+                            }
+                          : prev,
+                      )
+                    }
+                    disabled={!canWrite}
                   />
                 </div>
               )}
@@ -418,9 +675,18 @@ export function LeadDetailDrawer({ leadId, open, onOpenChange, tableId }: LeadDe
                 <Label className="text-xs text-muted-foreground">Website URL</Label>
                 <Input
                   className="h-8 text-sm"
-                  value={lead.websiteUrl}
-                  onChange={(e) => handleUpdate({ websiteUrl: e.target.value.trim() })}
-                  disabled={!canEdit && !isAdmin}
+                  value={draft.websiteUrl}
+                  onChange={(e) =>
+                    setDraft((prev) =>
+                      prev
+                        ? {
+                            ...prev,
+                            websiteUrl: e.target.value,
+                          }
+                        : prev,
+                    )
+                  }
+                  disabled={!canWrite}
                   placeholder="https://..."
                 />
               </div>
@@ -433,9 +699,18 @@ export function LeadDetailDrawer({ leadId, open, onOpenChange, tableId }: LeadDe
               <Label className="text-xs text-muted-foreground">Notes</Label>
               <Textarea
                 className="min-h-[100px] text-sm"
-                value={lead.notes}
-                onChange={(e) => handleUpdate({ notes: e.target.value })}
-                disabled={!canEdit && !isAdmin}
+                value={draft.notes}
+                onChange={(e) =>
+                  setDraft((prev) =>
+                    prev
+                      ? {
+                          ...prev,
+                          notes: e.target.value,
+                        }
+                      : prev,
+                  )
+                }
+                disabled={!canWrite}
                 placeholder="Add notes..."
               />
               <div className="flex flex-wrap gap-1.5">
@@ -453,7 +728,7 @@ export function LeadDetailDrawer({ leadId, open, onOpenChange, tableId }: LeadDe
                     size="sm"
                     className="h-6 text-[10px] px-2"
                     onClick={() => void appendNote(chip)}
-                    disabled={!canEdit && !isAdmin}
+                    disabled={!canWrite}
                   >
                     <Plus className="h-3 w-3 mr-1" />
                     {chip}
@@ -559,6 +834,42 @@ export function LeadDetailDrawer({ leadId, open, onOpenChange, tableId }: LeadDe
             </Collapsible>
           </div>
         </ScrollArea>
+        {canWrite && (
+          <div className="border-t p-4">
+            <div className="flex flex-col gap-2 sm:flex-row sm:justify-end">
+              {!lead.isArchived ? (
+                <AlertDialog>
+                  <AlertDialogTrigger asChild>
+                    <Button variant="destructive" className="w-full sm:w-auto" disabled={isDeleting}>
+                      {isDeleting ? "Deleting..." : "Delete lead"}
+                    </Button>
+                  </AlertDialogTrigger>
+                  <AlertDialogContent>
+                    <AlertDialogHeader>
+                      <AlertDialogTitle>Delete this lead?</AlertDialogTitle>
+                      <AlertDialogDescription>
+                        This will move the lead to archived and remove it from active views.
+                      </AlertDialogDescription>
+                    </AlertDialogHeader>
+                    <AlertDialogFooter>
+                      <AlertDialogCancel>Cancel</AlertDialogCancel>
+                      <AlertDialogAction onClick={() => void handleDeleteLead()}>
+                        Delete
+                      </AlertDialogAction>
+                    </AlertDialogFooter>
+                  </AlertDialogContent>
+                </AlertDialog>
+              ) : null}
+              <Button
+                className="w-full sm:w-auto"
+                onClick={() => void handleSave()}
+                disabled={!hasUnsavedChanges || isSaving}
+              >
+                {isSaving ? "Saving..." : "Save changes"}
+              </Button>
+            </div>
+          </div>
+        )}
       </SheetContent>
     </Sheet>
   )

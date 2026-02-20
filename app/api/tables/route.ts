@@ -3,6 +3,7 @@ import { z } from 'zod'
 import { getProfileOrThrow, requireAdmin } from '@/lib/auth'
 import { ApiError, ok, withErrorHandling } from '@/lib/http'
 import { searchParamsToObject } from '@/lib/query'
+import { createAdminSupabaseClient } from '@/lib/supabase/admin'
 import { createServerSupabaseClient } from '@/lib/supabase/server'
 import { booleanFromFlag } from '@/lib/validation/common'
 import { tableCreateSchema } from '@/lib/validation/tables'
@@ -92,8 +93,9 @@ export const POST = withErrorHandling(async (request: Request) => {
   requireAdmin(context)
 
   const payload = tableCreateSchema.parse(await request.json())
+  const adminSupabase = createAdminSupabaseClient()
 
-  const { data, error } = await supabase
+  const { data, error } = await adminSupabase
     .from('lead_tables')
     .insert({
       org_id: context.profile.org_id,
