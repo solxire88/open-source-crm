@@ -112,7 +112,13 @@ interface StoreContextValue {
   uploadAttachment: (leadId: string, file: File) => Promise<void>
   // Users management
   users: User[]
-  addUser: (u: User) => Promise<void>
+  addUser: (
+    u: User,
+    options?: {
+      invite?: boolean
+      tempPassword?: string
+    },
+  ) => Promise<{ tempPassword: string | null }>
   updateUser: (id: string, updates: Partial<User>) => Promise<void>
   deleteUser: (id: string) => Promise<void>
 }
@@ -1148,24 +1154,38 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
     )
   }, [])
 
-  const addUser = useCallback(async (user: User) => {
+  const addUser = useCallback(async (
+    user: User,
+    options?: {
+      invite?: boolean
+      tempPassword?: string
+    },
+  ) => {
+    const invite = options?.invite ?? false
+    const tempPassword = options?.tempPassword
+
     const response = await apiFetch<{
       item: {
         auth_user: { id: string; email?: string | null }
         profile: { user_id: string; display_name: string; role: "admin" | "sales" }
       }
+      temp_password?: string | null
     }>("/api/admin/users", {
       method: "POST",
       body: JSON.stringify({
         email: user.email,
         display_name: user.name,
         role: user.role,
-        invite: true,
+        invite,
+        ...(invite ? {} : { temp_password: tempPassword }),
       }),
     })
 
     const mapped = toUser(response.item.profile, response.item.auth_user.email)
     setUsers((prev) => [...prev, mapped])
+    return {
+      tempPassword: response.temp_password ?? (invite ? null : tempPassword ?? null),
+    }
   }, [])
 
   const updateUser = useCallback(async (id: string, updates: Partial<User>) => {

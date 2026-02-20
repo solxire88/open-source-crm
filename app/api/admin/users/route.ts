@@ -68,7 +68,22 @@ export const POST = withErrorHandling(async (request: Request) => {
       })
 
   if (authResponse.error || !authResponse.data.user) {
-    throw new ApiError(500, 'ADMIN_USER_CREATE_FAILED', 'Failed to create auth user', authResponse.error)
+    if (authResponse.error) {
+      const message = authResponse.error.message ?? 'Failed to create auth user'
+      const normalized = message.toLowerCase()
+
+      if (normalized.includes('already been registered')) {
+        throw new ApiError(409, 'ADMIN_USER_EXISTS', 'A user with this email already exists')
+      }
+
+      if (normalized.includes('password')) {
+        throw new ApiError(400, 'INVALID_TEMP_PASSWORD', message)
+      }
+
+      throw new ApiError(500, 'ADMIN_USER_CREATE_FAILED', message, authResponse.error)
+    }
+
+    throw new ApiError(500, 'ADMIN_USER_CREATE_FAILED', 'Failed to create auth user')
   }
 
   const authUser = authResponse.data.user
@@ -100,6 +115,7 @@ export const POST = withErrorHandling(async (request: Request) => {
         },
         profile,
       },
+      temp_password: payload.invite ? null : payload.temp_password ?? null,
     },
     201,
   )

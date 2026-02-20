@@ -50,16 +50,27 @@ import {
 } from "@/components/ui/dropdown-menu"
 import { MoreHorizontal, Plus, UserPlus, Trash2, RefreshCw } from "lucide-react"
 
+const generateTempPassword = () => {
+  const random = Math.random().toString(36).slice(-8)
+  return `Sales${random}!`
+}
+
 export function AdminUsersTab() {
   const { users, addUser, updateUser, deleteUser, leads } = useStore()
   const [inviteOpen, setInviteOpen] = useState(false)
   const [name, setName] = useState("")
   const [email, setEmail] = useState("")
+  const [tempPassword, setTempPassword] = useState(generateTempPassword())
   const [role, setRole] = useState<Role>("sales")
 
   const handleInvite = async () => {
-    if (!name.trim() || !email.trim()) {
-      toast.error("Name and email are required")
+    if (!name.trim() || !email.trim() || !tempPassword.trim()) {
+      toast.error("Name, email, and temporary password are required")
+      return
+    }
+
+    if (tempPassword.trim().length < 8) {
+      toast.error("Temporary password must be at least 8 characters")
       return
     }
 
@@ -70,14 +81,27 @@ export function AdminUsersTab() {
       role,
     }
     try {
-      await addUser(newUser)
-      toast.success(`Invited ${newUser.name}`)
+      const result = await addUser(newUser, {
+        invite: false,
+        tempPassword: tempPassword.trim(),
+      })
+
+      if (result.tempPassword) {
+        await navigator.clipboard.writeText(result.tempPassword)
+      }
+
+      toast.success(
+        result.tempPassword
+          ? `Created ${newUser.name}. Password copied to clipboard.`
+          : `Created ${newUser.name}.`,
+      )
       setName("")
       setEmail("")
+      setTempPassword(generateTempPassword())
       setRole("sales")
       setInviteOpen(false)
     } catch (error) {
-      const message = error instanceof Error ? error.message : "Failed to invite user"
+      const message = error instanceof Error ? error.message : "Failed to create user"
       toast.error(message)
     }
   }
@@ -91,7 +115,7 @@ export function AdminUsersTab() {
         <p className="text-sm text-muted-foreground">{users.length} users</p>
         <Button size="sm" className="gap-1.5 text-xs" onClick={() => setInviteOpen(true)}>
           <UserPlus className="h-3.5 w-3.5" />
-          Invite user
+          Create user
         </Button>
       </div>
 
@@ -188,12 +212,12 @@ export function AdminUsersTab() {
         </Table>
       </div>
 
-      {/* Invite dialog */}
+      {/* Create user dialog */}
       <Dialog open={inviteOpen} onOpenChange={setInviteOpen}>
         <DialogContent className="max-w-sm">
           <DialogHeader>
-            <DialogTitle>Invite User</DialogTitle>
-            <DialogDescription>Add a new user to the organization.</DialogDescription>
+            <DialogTitle>Create User</DialogTitle>
+            <DialogDescription>Create a user with a temporary password.</DialogDescription>
           </DialogHeader>
           <div className="flex flex-col gap-4 py-2">
             <div className="grid gap-1.5">
@@ -203,6 +227,29 @@ export function AdminUsersTab() {
             <div className="grid gap-1.5">
               <Label>Email</Label>
               <Input type="email" value={email} onChange={(e) => setEmail(e.target.value)} placeholder="user@company.com" />
+            </div>
+            <div className="grid gap-1.5">
+              <div className="flex items-center justify-between">
+                <Label>Temporary password</Label>
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="sm"
+                  className="h-7 px-2 text-xs"
+                  onClick={() => setTempPassword(generateTempPassword())}
+                >
+                  Generate
+                </Button>
+              </div>
+              <Input
+                type="text"
+                value={tempPassword}
+                onChange={(e) => setTempPassword(e.target.value)}
+                placeholder="At least 8 characters"
+              />
+              <p className="text-xs text-muted-foreground">
+                Share this password with the user. They can change it after login.
+              </p>
             </div>
             <div className="grid gap-1.5">
               <Label>Role</Label>
@@ -217,7 +264,7 @@ export function AdminUsersTab() {
           </div>
           <DialogFooter>
             <Button variant="outline" onClick={() => setInviteOpen(false)}>Cancel</Button>
-            <Button onClick={() => void handleInvite()}>Invite</Button>
+            <Button onClick={() => void handleInvite()}>Create</Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>
