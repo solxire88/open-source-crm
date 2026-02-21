@@ -134,6 +134,7 @@ In Supabase Auth URL settings, add:
 
 ## Mini Tutorial: Scrape -> Import -> Track Leads
 See [`docs/scrape-to-crm.md`](docs/scrape-to-crm.md).
+For a one-page handoff doc for scrapers, see [`docs/scraper-quick-guide.pdf`](docs/scraper-quick-guide.pdf).
 
 ## Contributing
 See [`CONTRIBUTING.md`](CONTRIBUTING.md).
@@ -147,4 +148,3 @@ MIT - see [`LICENSE`](LICENSE).
 - Duplicate detection UX during CSV import
 - Activity notifications and reminders
 - More granular audit/event filtering
-
