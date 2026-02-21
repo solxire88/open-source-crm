@@ -91,7 +91,7 @@ export function ImportCsvDialog({ open, onOpenChange, tableId }: ImportCsvDialog
       }
 
       setResult(payload as ImportResponse)
-      await loadTableWorkspace(tableId)
+      await loadTableWorkspace(tableId, { force: true })
       toast.success("Import completed")
     } catch (error) {
       const message = error instanceof Error ? error.message : "CSV import failed"

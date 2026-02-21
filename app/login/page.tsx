@@ -8,14 +8,15 @@ import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
-import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 
 export default function LoginPage() {
     const router = useRouter()
-    const { isAuthenticated, isBootstrapping, loginWithPassword, loginWithMagicLink } = useStore()
+    const { isAuthenticated, isBootstrapping, loginWithPassword, org } = useStore()
     const [email, setEmail] = useState("")
     const [password, setPassword] = useState("")
     const [submitting, setSubmitting] = useState(false)
+    const [brandingName, setBrandingName] = useState("Sales CRM")
+    const [brandingLogoUrl, setBrandingLogoUrl] = useState<string | null>(null)
 
     // If already authenticated, redirect to home
     useEffect(() => {
@@ -23,6 +24,45 @@ export default function LoginPage() {
             router.replace("/")
         }
     }, [isAuthenticated, router])
+
+    useEffect(() => {
+        if (org.name) {
+            setBrandingName(org.name)
+        }
+        if (org.logoUrl !== undefined) {
+            setBrandingLogoUrl(org.logoUrl ?? null)
+        }
+    }, [org.logoUrl, org.name])
+
+    useEffect(() => {
+        let active = true
+
+        const loadBranding = async () => {
+            try {
+                const response = await fetch("/api/public/branding", { cache: "no-store" })
+                if (!response.ok) return
+
+                const payload = await response.json()
+                const organization = payload?.organization
+                if (!active || !organization) return
+
+                if (typeof organization.name === "string" && organization.name.trim().length > 0) {
+                    setBrandingName(organization.name)
+                }
+                setBrandingLogoUrl(organization.logo_signed_url ?? organization.logo_url ?? null)
+            } catch {
+                // Keep local fallback branding.
+            }
+        }
+
+        void loadBranding()
+
+        return () => {
+            active = false
+        }
+    }, [])
+
+    const brandingInitial = brandingName.trim().charAt(0).toUpperCase() || "A"
 
     const handleSignIn = async (e: React.FormEvent) => {
         e.preventDefault()
@@ -32,20 +72,6 @@ export default function LoginPage() {
           router.push("/")
         } catch (error) {
           const message = error instanceof Error ? error.message : "Failed to sign in"
-          toast.error(message)
-        } finally {
-          setSubmitting(false)
-        }
-    }
-
-    const handleMagicLink = async (e: React.FormEvent) => {
-        e.preventDefault()
-        setSubmitting(true)
-        try {
-          await loginWithMagicLink(email.trim())
-          toast.success("Magic link sent. Check your inbox.")
-        } catch (error) {
-          const message = error instanceof Error ? error.message : "Failed to send magic link"
           toast.error(message)
         } finally {
           setSubmitting(false)
@@ -64,79 +90,48 @@ export default function LoginPage() {
         <div className="flex min-h-screen items-center justify-center bg-background p-4">
             <Card className="w-full max-w-sm">
                 <CardHeader className="text-center">
-                    <div className="mx-auto mb-4 flex h-10 w-10 items-center justify-center rounded-lg bg-primary text-primary-foreground font-bold text-lg">
-                        A
-                    </div>
+                    {brandingLogoUrl ? (
+                        <img
+                            src={brandingLogoUrl}
+                            alt={`${brandingName} logo`}
+                            className="mx-auto mb-4 h-10 w-10 rounded-lg object-cover border"
+                        />
+                    ) : (
+                        <div className="mx-auto mb-4 flex h-10 w-10 items-center justify-center rounded-lg bg-primary text-primary-foreground font-bold text-lg">
+                            {brandingInitial}
+                        </div>
+                    )}
                     <CardTitle className="text-xl">Welcome back</CardTitle>
                     <CardDescription>Sign in to your account to continue</CardDescription>
                 </CardHeader>
                 <CardContent>
-                    <Tabs defaultValue="password">
-                        <TabsList className="grid w-full grid-cols-2">
-                            <TabsTrigger value="password">Password</TabsTrigger>
-                            <TabsTrigger value="magic-link">Magic Link</TabsTrigger>
-                        </TabsList>
-
-                        <TabsContent value="password">
-                            <form onSubmit={handleSignIn} className="flex flex-col gap-4 pt-4">
-                                <div className="flex flex-col gap-2">
-                                    <Label htmlFor="email">Email</Label>
-                                    <Input
-                                        id="email"
-                                        type="email"
-                                        placeholder="you@company.com"
-                                        value={email}
-                                        onChange={(e) => setEmail(e.target.value)}
-                                        required
-                                    />
-                                </div>
-                                <div className="flex flex-col gap-2">
-                                    <div className="flex items-center justify-between">
-                                        <Label htmlFor="password">Password</Label>
-                                        <button
-                                            type="button"
-                                            className="text-xs text-muted-foreground hover:text-foreground transition-colors"
-                                        >
-                                            Forgot password?
-                                        </button>
-                                    </div>
-                                    <Input
-                                        id="password"
-                                        type="password"
-                                        placeholder="Enter your password"
-                                        value={password}
-                                        onChange={(e) => setPassword(e.target.value)}
-                                        required
-                                    />
-                                </div>
-                                <Button type="submit" className="w-full" disabled={submitting}>
-                                    Sign in
-                                </Button>
-                            </form>
-                        </TabsContent>
-
-                        <TabsContent value="magic-link">
-                            <form onSubmit={handleMagicLink} className="flex flex-col gap-4 pt-4">
-                                <div className="flex flex-col gap-2">
-                                    <Label htmlFor="magic-email">Email</Label>
-                                    <Input
-                                        id="magic-email"
-                                        type="email"
-                                        placeholder="you@company.com"
-                                        value={email}
-                                        onChange={(e) => setEmail(e.target.value)}
-                                        required
-                                    />
-                                </div>
-                                <Button type="submit" className="w-full" disabled={submitting}>
-                                    Send magic link
-                                </Button>
-                                <p className="text-xs text-center text-muted-foreground">
-                                    {"We'll send you a magic link to sign in without a password."}
-                                </p>
-                            </form>
-                        </TabsContent>
-                    </Tabs>
+                    <form onSubmit={handleSignIn} className="flex flex-col gap-4 pt-2">
+                        <div className="flex flex-col gap-2">
+                            <Label htmlFor="email">Email</Label>
+                            <Input
+                                id="email"
+                                type="email"
+                                placeholder="you@company.com"
+                                value={email}
+                                onChange={(e) => setEmail(e.target.value)}
+                                required
+                            />
+                        </div>
+                        <div className="flex flex-col gap-2">
+                            <Label htmlFor="password">Password</Label>
+                            <Input
+                                id="password"
+                                type="password"
+                                placeholder="Enter your password"
+                                value={password}
+                                onChange={(e) => setPassword(e.target.value)}
+                                required
+                            />
+                        </div>
+                        <Button type="submit" className="w-full" disabled={submitting}>
+                            Sign in
+                        </Button>
+                    </form>
                 </CardContent>
             </Card>
         </div>

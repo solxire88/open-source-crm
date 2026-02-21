@@ -38,10 +38,21 @@ import {
   DropdownMenuItem,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu"
-import { Archive, MoreHorizontal, Pencil, Plus } from "lucide-react"
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+  AlertDialogTrigger,
+} from "@/components/ui/alert-dialog"
+import { Archive, MoreHorizontal, Pencil, Plus, Trash2 } from "lucide-react"
 
 export function AdminTablesTab() {
-  const { tables, addTable, updateTable } = useStore()
+  const { tables, addTable, updateTable, deleteTable } = useStore()
   const [createOpen, setCreateOpen] = useState(false)
   const [editTable, setEditTable] = useState<SalesTable | null>(null)
   const [name, setName] = useState("")
@@ -165,6 +176,48 @@ export function AdminTablesTab() {
                         <Archive className="mr-2 h-3.5 w-3.5" />
                         {table.isArchived ? "Restore" : "Archive"}
                       </DropdownMenuItem>
+                      <AlertDialog>
+                        <AlertDialogTrigger asChild>
+                          <DropdownMenuItem
+                            onSelect={(event) => event.preventDefault()}
+                            className="text-destructive focus:text-destructive"
+                          >
+                            <Trash2 className="mr-2 h-3.5 w-3.5" />
+                            Delete
+                          </DropdownMenuItem>
+                        </AlertDialogTrigger>
+                        <AlertDialogContent>
+                          <AlertDialogHeader>
+                            <AlertDialogTitle>Delete {table.name}?</AlertDialogTitle>
+                            <AlertDialogDescription>
+                              This permanently deletes the table and all related leads, services,
+                              permissions, events, imports, and attachments.
+                            </AlertDialogDescription>
+                          </AlertDialogHeader>
+                          <AlertDialogFooter>
+                            <AlertDialogCancel>Cancel</AlertDialogCancel>
+                            <AlertDialogAction
+                              className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+                              onClick={() => {
+                                void (async () => {
+                                  try {
+                                    await deleteTable(table.id)
+                                    toast.success("Table deleted")
+                                  } catch (error) {
+                                    const message =
+                                      error instanceof Error
+                                        ? error.message
+                                        : "Failed to delete table"
+                                    toast.error(message)
+                                  }
+                                })()
+                              }}
+                            >
+                              Delete
+                            </AlertDialogAction>
+                          </AlertDialogFooter>
+                        </AlertDialogContent>
+                      </AlertDialog>
                     </DropdownMenuContent>
                   </DropdownMenu>
                 </TableCell>

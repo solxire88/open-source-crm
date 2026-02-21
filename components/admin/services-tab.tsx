@@ -23,10 +23,27 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table"
-import { Archive, Plus } from "lucide-react"
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+  AlertDialogTrigger,
+} from "@/components/ui/alert-dialog"
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu"
+import { Archive, MoreHorizontal, Plus, Trash2 } from "lucide-react"
 
 export function AdminServicesTab() {
-  const { tables, services, addService, updateService } = useStore()
+  const { tables, services, addService, updateService, deleteService } = useStore()
   const nonArchivedTables = tables.filter((t) => !t.isArchived)
   const [selectedTableId, setSelectedTableId] = useState(nonArchivedTables[0]?.id ?? "")
   const [newServiceName, setNewServiceName] = useState("")
@@ -124,26 +141,71 @@ export function AdminServicesTab() {
                     )}
                   </TableCell>
                   <TableCell>
-                    <Button
-                      variant="ghost"
-                      size="sm"
-                      className="h-7 text-xs gap-1"
-                      onClick={() => {
-                        void (async () => {
-                          try {
-                            await updateService(service.id, { isArchived: !service.isArchived })
-                            toast.success(service.isArchived ? "Service restored" : "Service archived")
-                          } catch (error) {
-                            const message =
-                              error instanceof Error ? error.message : "Failed to update service"
-                            toast.error(message)
-                          }
-                        })()
-                      }}
-                    >
-                      <Archive className="h-3 w-3" />
-                      {service.isArchived ? "Restore" : "Archive"}
-                    </Button>
+                    <DropdownMenu>
+                      <DropdownMenuTrigger asChild>
+                        <Button variant="ghost" size="sm" className="h-7 w-7 p-0">
+                          <MoreHorizontal className="h-3.5 w-3.5" />
+                        </Button>
+                      </DropdownMenuTrigger>
+                      <DropdownMenuContent align="end">
+                        <DropdownMenuItem
+                          onClick={() => {
+                            void (async () => {
+                              try {
+                                await updateService(service.id, { isArchived: !service.isArchived })
+                                toast.success(service.isArchived ? "Service restored" : "Service archived")
+                              } catch (error) {
+                                const message =
+                                  error instanceof Error ? error.message : "Failed to update service"
+                                toast.error(message)
+                              }
+                            })()
+                          }}
+                        >
+                          <Archive className="mr-2 h-3.5 w-3.5" />
+                          {service.isArchived ? "Restore" : "Archive"}
+                        </DropdownMenuItem>
+                        <AlertDialog>
+                          <AlertDialogTrigger asChild>
+                            <DropdownMenuItem
+                              onSelect={(event) => event.preventDefault()}
+                              className="text-destructive focus:text-destructive"
+                            >
+                              <Trash2 className="mr-2 h-3.5 w-3.5" />
+                              Delete
+                            </DropdownMenuItem>
+                          </AlertDialogTrigger>
+                          <AlertDialogContent>
+                            <AlertDialogHeader>
+                              <AlertDialogTitle>Delete service "{service.name}"?</AlertDialogTitle>
+                              <AlertDialogDescription>
+                                This permanently deletes the service and removes it from all leads.
+                              </AlertDialogDescription>
+                            </AlertDialogHeader>
+                            <AlertDialogFooter>
+                              <AlertDialogCancel>Cancel</AlertDialogCancel>
+                              <AlertDialogAction
+                                className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+                                onClick={() => {
+                                  void (async () => {
+                                    try {
+                                      await deleteService(service.id)
+                                      toast.success("Service deleted")
+                                    } catch (error) {
+                                      const message =
+                                        error instanceof Error ? error.message : "Failed to delete service"
+                                      toast.error(message)
+                                    }
+                                  })()
+                                }}
+                              >
+                                Delete
+                              </AlertDialogAction>
+                            </AlertDialogFooter>
+                          </AlertDialogContent>
+                        </AlertDialog>
+                      </DropdownMenuContent>
+                    </DropdownMenu>
                   </TableCell>
                 </TableRow>
               ))

@@ -23,8 +23,8 @@ export function useLeads() {
 }
 
 export function useServices() {
-  const { services, addService, updateService } = useStore()
-  return { services, addService, updateService }
+  const { services, addService, updateService, deleteService } = useStore()
+  return { services, addService, updateService, deleteService }
 }
 
 export function useFavorites() {
@@ -46,4 +46,3 @@ export function useUsersManagement() {
   const { users, addUser, updateUser, deleteUser } = useStore()
   return { users, addUser, updateUser, deleteUser }
 }
-

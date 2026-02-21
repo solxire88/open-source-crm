@@ -3,13 +3,11 @@
 import React, { useEffect, useRef, useState } from "react"
 import { format, formatDistanceToNow } from "date-fns"
 import {
-  Clock,
   Copy,
   Globe,
   Instagram,
   Mail,
   MessageCircle,
-  Paperclip,
   Phone,
   Plus,
 } from "lucide-react"
@@ -40,11 +38,6 @@ import { Switch } from "@/components/ui/switch"
 import { Textarea } from "@/components/ui/textarea"
 import { ScrollArea } from "@/components/ui/scroll-area"
 import { StageBadge } from "@/components/stage-badge"
-import {
-  Collapsible,
-  CollapsibleContent,
-  CollapsibleTrigger,
-} from "@/components/ui/collapsible"
 import {
   AlertDialog,
   AlertDialogAction,
@@ -122,34 +115,19 @@ export function LeadDetailDrawer({ leadId, open, onOpenChange, tableId }: LeadDe
     currentUser,
     allUsers,
     services,
-    events,
-    attachments,
     getAccess,
-    loadLeadArtifacts,
-    uploadAttachment,
     logTouchLead,
   } = useStore()
   const lead = leads.find((l) => l.id === leadId)
   const tableServices = services.filter((s) => s.tableId === tableId && !s.isArchived)
-  const leadEvents = events.filter((e) => e.leadId === leadId).sort(
-    (a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()
-  )
-  const leadAttachments = attachments.filter((a) => a.leadId === leadId)
   const access = getAccess(tableId)
   const canEdit = access === "edit"
   const isAdmin = currentUser.role === "admin"
   const canWrite = canEdit || isAdmin
-  const [historyOpen, setHistoryOpen] = useState(false)
   const [isSaving, setIsSaving] = useState(false)
   const [isDeleting, setIsDeleting] = useState(false)
   const [draft, setDraft] = useState<LeadDraft | null>(null)
   const initializedLeadIdRef = useRef<string | null>(null)
-  const fileInputRef = useRef<HTMLInputElement | null>(null)
-
-  useEffect(() => {
-    if (!open || !leadId) return
-    void loadLeadArtifacts(leadId)
-  }, [leadId, loadLeadArtifacts, open])
 
   useEffect(() => {
     if (!open) {
@@ -738,100 +716,6 @@ export function LeadDetailDrawer({ leadId, open, onOpenChange, tableId }: LeadDe
             </div>
 
             <Separator />
-
-            {/* Attachments */}
-            <div className="grid gap-2">
-              <Label className="text-xs text-muted-foreground">Attachments</Label>
-              {leadAttachments.length > 0 ? (
-                <div className="flex flex-col gap-1.5">
-                  {leadAttachments.map((a) => (
-                    <div key={a.id} className="flex items-center gap-2 rounded border p-2 text-xs">
-                      <Paperclip className="h-3.5 w-3.5 text-muted-foreground" />
-                      <span className="flex-1 truncate">{a.filename}</span>
-                      <span className="text-muted-foreground">{format(new Date(a.createdAt), "MMM d")}</span>
-                    </div>
-                  ))}
-                </div>
-              ) : (
-                <p className="text-xs text-muted-foreground">No attachments</p>
-              )}
-              {(canEdit || isAdmin) && (
-                <>
-                  <input
-                    ref={fileInputRef}
-                    type="file"
-                    className="hidden"
-                    onChange={(event) => {
-                      const file = event.target.files?.[0]
-                      if (!file || !leadId) return
-                      void (async () => {
-                        try {
-                          await uploadAttachment(leadId, file)
-                          toast.success("Attachment uploaded")
-                        } catch (error) {
-                          const message = error instanceof Error ? error.message : "Upload failed"
-                          toast.error(message)
-                        } finally {
-                          event.target.value = ""
-                        }
-                      })()
-                    }}
-                  />
-                  <Button
-                    variant="outline"
-                    size="sm"
-                    className="w-fit text-xs gap-1.5"
-                    onClick={() => fileInputRef.current?.click()}
-                  >
-                  <Plus className="h-3.5 w-3.5" />
-                  Upload file
-                  </Button>
-                </>
-              )}
-            </div>
-
-            <Separator />
-
-            {/* History */}
-            <Collapsible open={historyOpen} onOpenChange={setHistoryOpen}>
-              <CollapsibleTrigger className="flex items-center gap-2 text-sm font-medium w-full hover:underline">
-                <Clock className="h-4 w-4" />
-                History ({leadEvents.length} events)
-              </CollapsibleTrigger>
-              <CollapsibleContent className="pt-2">
-                {leadEvents.length > 0 ? (
-                  <div className="flex flex-col gap-2">
-                    {leadEvents.map((ev) => {
-                      const user = allUsers.find((u) => u.id === ev.byUser)
-                      return (
-                        <div key={ev.id} className="flex gap-3 text-xs">
-                          <div className="w-2 h-2 rounded-full bg-muted-foreground mt-1.5 shrink-0" />
-                          <div className="flex-1 min-w-0">
-                            <p className="text-foreground">
-                              <span className="font-medium">{user?.name ?? "System"}</span>{" "}
-                              {ev.type === "stage_change" && `changed stage: ${ev.meta.from} → ${ev.meta.to}`}
-                              {ev.type === "owner_change" && "changed owner"}
-                              {ev.type === "dnc_change" && `set DNC: ${ev.meta.value}`}
-                              {ev.type === "touch_logged" && `logged: ${ev.meta.note}`}
-                              {ev.type === "follow_up_change" && "updated follow-up"}
-                              {ev.type === "services_change" && "updated services"}
-                              {ev.type === "import" && "imported lead"}
-                              {ev.type === "note_added" && "added note"}
-                              {ev.type === "merge" && "merged lead"}
-                            </p>
-                            <p className="text-muted-foreground">
-                              {format(new Date(ev.createdAt), "MMM d, yyyy HH:mm")}
-                            </p>
-                          </div>
-                        </div>
-                      )
-                    })}
-                  </div>
-                ) : (
-                  <p className="text-xs text-muted-foreground">No history yet</p>
-                )}
-              </CollapsibleContent>
-            </Collapsible>
           </div>
         </ScrollArea>
         {canWrite && (

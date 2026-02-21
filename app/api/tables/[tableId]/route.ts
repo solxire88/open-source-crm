@@ -67,3 +67,23 @@ export const PATCH = withErrorHandling(async (request: Request, { params }: Rout
 
   return ok({ item: data })
 })
+
+export const DELETE = withErrorHandling(async (_request: Request, { params }: RouteContext) => {
+  const { tableId } = await params
+  const supabase = await createServerSupabaseClient()
+  const context = await getProfileOrThrow(supabase)
+  await requireTableRead(context, tableId)
+  requireAdmin(context)
+
+  const { error } = await supabase
+    .from('lead_tables')
+    .delete()
+    .eq('id', tableId)
+    .eq('org_id', context.profile.org_id)
+
+  if (error) {
+    throw new ApiError(500, 'TABLE_DELETE_FAILED', 'Failed to delete table', error)
+  }
+
+  return ok({ success: true })
+})

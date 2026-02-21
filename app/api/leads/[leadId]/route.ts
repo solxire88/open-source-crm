@@ -123,5 +123,20 @@ export const PATCH = withErrorHandling(async (request: Request, { params }: Rout
     }
   }
 
-  return ok({ item: updatedLead })
+  const { data: hydratedLead, error: hydratedError } = await supabase
+    .from('leads')
+    .select('*, lead_services(service_id)')
+    .eq('id', leadId)
+    .single()
+
+  if (hydratedError || !hydratedLead) {
+    throw new ApiError(
+      500,
+      'LEAD_RELOAD_FAILED',
+      'Lead updated but failed to reload latest lead state',
+      hydratedError,
+    )
+  }
+
+  return ok({ item: hydratedLead })
 })

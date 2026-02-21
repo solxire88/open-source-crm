@@ -9,12 +9,12 @@ import { paginationSchema, uuidSchema } from '@/lib/validation/common'
 
 const nullableTrimmedString = z
   .union([z.string(), z.null()])
-  .optional()
   .transform((value) => {
     if (value == null) return null
     const trimmed = value.trim()
     return trimmed.length === 0 ? null : trimmed
   })
+  .optional()
 
 const stageSchema = z.enum(STAGE_VALUES)
 const sourceTypeSchema = z.enum(SOURCE_TYPE_VALUES)

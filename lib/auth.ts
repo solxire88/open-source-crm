@@ -8,6 +8,34 @@ import type {
 } from '@/lib/backend-types'
 import { ApiError, forbidden, notFound, unauthorized } from '@/lib/http'
 
+const isTransientUpstreamError = (error: unknown) => {
+  if (!error || typeof error !== 'object') {
+    return false
+  }
+
+  const maybeError = error as {
+    code?: unknown
+    message?: unknown
+    name?: unknown
+  }
+
+  const code = typeof maybeError.code === 'string' ? maybeError.code.toLowerCase() : ''
+  const message =
+    typeof maybeError.message === 'string' ? maybeError.message.toLowerCase() : ''
+  const name = typeof maybeError.name === 'string' ? maybeError.name.toLowerCase() : ''
+
+  return (
+    code.includes('und_err') ||
+    code.includes('timeout') ||
+    code.includes('econn') ||
+    message.includes('fetch failed') ||
+    message.includes('timeout') ||
+    message.includes('network') ||
+    message.includes('connect') ||
+    name.includes('timeout')
+  )
+}
+
 export interface AuthContext {
   user: User
   profile: ProfileRow
@@ -23,7 +51,20 @@ export const getProfileOrThrow = async (
     error: userError,
   } = await supabase.auth.getUser()
 
-  if (userError || !user) {
+  if (userError) {
+    if (isTransientUpstreamError(userError)) {
+      throw new ApiError(
+        503,
+        'AUTH_UPSTREAM_UNAVAILABLE',
+        'Authentication service is temporarily unavailable',
+        userError,
+      )
+    }
+
+    unauthorized('Authentication required')
+  }
+
+  if (!user) {
     unauthorized('Authentication required')
   }
 
@@ -36,7 +77,7 @@ export const getProfileOrThrow = async (
   const typedProfile = profile as ProfileRow | null
 
   if (profileError) {
-    throw new ApiError(401, 'PROFILE_LOOKUP_FAILED', 'Failed to load profile', profileError)
+    throw new ApiError(500, 'PROFILE_LOOKUP_FAILED', 'Failed to load profile', profileError)
   }
 
   if (!typedProfile) {

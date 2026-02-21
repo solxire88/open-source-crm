@@ -6,7 +6,6 @@ import {
   Plus,
   Upload,
   Download,
-  CheckSquare,
   ChevronRight,
 } from "lucide-react"
 import { useStore } from "@/lib/store"
@@ -29,7 +28,8 @@ import { LeadDetailDrawer } from "@/components/lead-detail-drawer"
 import { AddLeadDialog } from "@/components/add-lead-dialog"
 import { ImportCsvDialog } from "@/components/import-csv-dialog"
 import { ExportCsvDialog } from "@/components/export-csv-dialog"
-import { BulkActionsBar } from "@/components/bulk-actions-bar"
+
+type WorkspaceTab = "pipeline" | "new-leads" | "my-leads" | "followups" | "calendar"
 
 export default function TableWorkspacePage() {
   const params = useParams()
@@ -45,8 +45,24 @@ export default function TableWorkspacePage() {
   const [addLeadOpen, setAddLeadOpen] = useState(false)
   const [importOpen, setImportOpen] = useState(false)
   const [exportOpen, setExportOpen] = useState(false)
-  const [bulkMode, setBulkMode] = useState(false)
-  const [selectedLeadIds, setSelectedLeadIds] = useState<string[]>([])
+  const [activeTab, setActiveTab] = useState<WorkspaceTab>("followups")
+
+  const getWorkspaceLoadOptions = useCallback((tab: WorkspaceTab) => {
+    switch (tab) {
+      case "new-leads":
+        return { view: "new" as const }
+      case "my-leads":
+        return { view: "my" as const }
+      case "followups":
+        return { view: "due" as const }
+      case "pipeline":
+        return { view: "pipeline" as const, includeArchived: false, includeDnc: true }
+      case "calendar":
+        return { view: "all" as const, includeArchived: false, includeDnc: true }
+      default:
+        return { view: "all" as const, includeArchived: false, includeDnc: true }
+    }
+  }, [])
 
   const handleSelectLead = useCallback((id: string) => {
     setSelectedLeadId(id)
@@ -55,8 +71,8 @@ export default function TableWorkspacePage() {
 
   useEffect(() => {
     if (!tableId || !access) return
-    void loadTableWorkspace(tableId)
-  }, [access, loadTableWorkspace, tableId])
+    void loadTableWorkspace(tableId, getWorkspaceLoadOptions(activeTab))
+  }, [access, activeTab, getWorkspaceLoadOptions, loadTableWorkspace, tableId])
 
   if (isBootstrapping) {
     return (
@@ -107,15 +123,6 @@ export default function TableWorkspacePage() {
                 variant="outline"
                 size="sm"
                 className="gap-1.5 text-xs"
-                onClick={() => setBulkMode(!bulkMode)}
-              >
-                <CheckSquare className="h-3.5 w-3.5" />
-                {bulkMode ? "Exit bulk" : "Bulk"}
-              </Button>
-              <Button
-                variant="outline"
-                size="sm"
-                className="gap-1.5 text-xs"
                 onClick={() => setImportOpen(true)}
               >
                 <Upload className="h-3.5 w-3.5" />
@@ -147,17 +154,12 @@ export default function TableWorkspacePage() {
         </div>
       </div>
 
-      {/* Bulk actions bar */}
-      {bulkMode && selectedLeadIds.length > 0 && (
-        <BulkActionsBar
-          tableId={tableId}
-          selectedIds={selectedLeadIds}
-          onClear={() => setSelectedLeadIds([])}
-        />
-      )}
-
       {/* Tabs */}
-      <Tabs defaultValue="followups" className="flex-1 flex flex-col">
+      <Tabs
+        value={activeTab}
+        onValueChange={(value) => setActiveTab(value as WorkspaceTab)}
+        className="flex-1 flex flex-col"
+      >
         <div className="border-b px-6">
           <TabsList className="h-10 bg-transparent p-0 gap-4">
             <TabsTrigger

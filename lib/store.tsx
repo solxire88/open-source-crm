@@ -63,6 +63,13 @@ interface BulkActionInput {
   payload?: Record<string, unknown>
 }
 
+interface LoadTableWorkspaceOptions {
+  force?: boolean
+  view?: "new" | "my" | "due" | "pipeline" | "all"
+  includeArchived?: boolean
+  includeDnc?: boolean
+}
+
 interface StoreContextValue {
   // Auth
   isAuthenticated: boolean
@@ -80,7 +87,8 @@ interface StoreContextValue {
   tables: SalesTable[]
   addTable: (t: SalesTable) => Promise<void>
   updateTable: (id: string, updates: Partial<SalesTable>) => Promise<void>
-  loadTableWorkspace: (tableId: string) => Promise<void>
+  deleteTable: (id: string) => Promise<void>
+  loadTableWorkspace: (tableId: string, options?: LoadTableWorkspaceOptions) => Promise<void>
   // Permissions
   permissions: TablePermission[]
   updatePermission: (tableId: string, userId: string, access: AccessLevel | null) => Promise<void>
@@ -100,6 +108,7 @@ interface StoreContextValue {
   services: Service[]
   addService: (s: Service) => Promise<void>
   updateService: (id: string, updates: Partial<Service>) => Promise<void>
+  deleteService: (id: string) => Promise<void>
   // Favorites
   favorites: string[]
   toggleFavorite: (tableId: string) => Promise<void>
@@ -182,6 +191,8 @@ const createLeadPatchPayload = (updates: Partial<Lead>) => {
       typeof updates.contact === "string" ? updates.contact.trim() : ""
     if (normalizedContact.length > 0) {
       payload.contact = normalizedContact
+    } else {
+      payload.contact = null
     }
   }
   if ("websiteUrl" in updates) payload.website_url = updates.websiteUrl ?? null
@@ -223,6 +234,9 @@ const fetchAllPages = async <T,>(
 }
 
 export function StoreProvider({ children }: { children: React.ReactNode }) {
+  const refreshRunIdRef = useRef(0)
+  const hasBootstrappedRef = useRef(false)
+
   const [isAuthenticated, setIsAuthenticated] = useState(false)
   const [isBootstrapping, setIsBootstrapping] = useState(true)
   const [currentUser, setCurrentUser] = useState<User>(EMPTY_USER)
@@ -238,8 +252,88 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
 
   const leadPatchQueueRef = useRef<Map<string, Partial<Lead>>>(new Map())
   const leadPatchTimersRef = useRef<Map<string, ReturnType<typeof setTimeout>>>(new Map())
+  const tableWorkspaceLoadedRef = useRef<Set<string>>(new Set())
+  const tableWorkspaceLoadingRef = useRef<Map<string, Promise<void>>>(new Map())
+  const tableWorkspacePayloadRef = useRef<
+    Map<
+      string,
+      {
+        leads: Lead[]
+        services: Service[]
+      }
+    >
+  >(new Map())
+  const tableServicesLoadedRef = useRef<Set<string>>(new Set())
+
+  const getWorkspaceKey = useCallback(
+    (tableId: string, options: Required<Pick<LoadTableWorkspaceOptions, "view" | "includeArchived" | "includeDnc">>) =>
+      `${tableId}::${options.view}::arch=${options.includeArchived ? "1" : "0"}::dnc=${options.includeDnc ? "1" : "0"}`,
+    [],
+  )
+
+  const getWorkspaceOptions = useCallback(
+    (options?: LoadTableWorkspaceOptions) => {
+      const view = options?.view ?? "all"
+
+      const includeArchived =
+        options?.includeArchived ??
+        (view === "all" ? true : false)
+
+      const includeDnc =
+        options?.includeDnc ??
+        (view === "all" || view === "pipeline")
+
+      return {
+        view,
+        includeArchived,
+        includeDnc,
+      } as const
+    },
+    [],
+  )
+
+  const workspaceKeyBelongsToTable = useCallback((workspaceKey: string, tableId: string) => {
+    return workspaceKey.startsWith(`${tableId}::`)
+  }, [])
+
+  const invalidateTableWorkspaceCache = useCallback(
+    (tableId: string, options?: { invalidateServices?: boolean }) => {
+      tableWorkspaceLoadedRef.current.forEach((workspaceKey) => {
+        if (workspaceKeyBelongsToTable(workspaceKey, tableId)) {
+          tableWorkspaceLoadedRef.current.delete(workspaceKey)
+        }
+      })
+
+      tableWorkspaceLoadingRef.current.forEach((_promise, workspaceKey) => {
+        if (workspaceKeyBelongsToTable(workspaceKey, tableId)) {
+          tableWorkspaceLoadingRef.current.delete(workspaceKey)
+        }
+      })
+
+      tableWorkspacePayloadRef.current.forEach((_payload, workspaceKey) => {
+        if (workspaceKeyBelongsToTable(workspaceKey, tableId)) {
+          tableWorkspacePayloadRef.current.delete(workspaceKey)
+        }
+      })
+
+      if (options?.invalidateServices) {
+        tableServicesLoadedRef.current.delete(tableId)
+      }
+    },
+    [workspaceKeyBelongsToTable],
+  )
 
   const resetState = useCallback(() => {
+    refreshRunIdRef.current += 1
+
+    leadPatchTimersRef.current.forEach((timer) => clearTimeout(timer))
+    leadPatchTimersRef.current.clear()
+    leadPatchQueueRef.current.clear()
+    tableWorkspaceLoadedRef.current.clear()
+    tableWorkspaceLoadingRef.current.clear()
+    tableWorkspacePayloadRef.current.clear()
+    tableServicesLoadedRef.current.clear()
+
     setIsAuthenticated(false)
     setCurrentUser(EMPTY_USER)
     setUsers([])
@@ -251,6 +345,7 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
     setFavorites([])
     setEvents([])
     setAttachments([])
+    setIsBootstrapping(false)
   }, [])
 
   const fetchTableServices = useCallback(async (tableId: string) => {
@@ -264,7 +359,15 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
     return rows.map(toService)
   }, [])
 
-  const fetchTableLeads = useCallback(async (tableId: string) => {
+  const fetchTableLeads = useCallback(async (
+    tableId: string,
+    options: Required<Pick<LoadTableWorkspaceOptions, "view" | "includeArchived" | "includeDnc">>,
+  ) => {
+    const params = new URLSearchParams()
+    params.set("view", options.view)
+    params.set("includeArchived", options.includeArchived ? "1" : "0")
+    params.set("includeDnc", options.includeDnc ? "1" : "0")
+
     const rows = await fetchAllPages<{
       id: string
       table_id: string
@@ -286,38 +389,54 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
       stage_changed_at: string
       created_at: string
       lead_services?: Array<{ service_id: string }>
-    }>(
-      (offset, limit) =>
-        `/api/tables/${tableId}/leads?view=all&includeArchived=1&includeDnc=1&limit=${limit}&offset=${offset}`,
-    )
+    }>((offset, limit) => {
+      params.set("limit", String(limit))
+      params.set("offset", String(offset))
+      return `/api/tables/${tableId}/leads?${params.toString()}`
+    })
 
     return rows.map((row) => toLead(row))
   }, [])
 
+  const fetchTablePermissions = useCallback(async (tableId: string) => {
+    const rows = await fetchAllPages<{
+      user_id: string
+      access_level: "read" | "edit"
+    }>((offset, limit) => `/api/tables/${tableId}/permissions?limit=${limit}&offset=${offset}`)
+
+    return rows.map((entry) =>
+      toTablePermission({
+        table_id: tableId,
+        user_id: entry.user_id,
+        access_level: entry.access_level,
+      }),
+    )
+  }, [])
+
+  const fetchOrgPermissions = useCallback(async () => {
+    const rows = await fetchAllPages<{
+      table_id: string
+      user_id: string
+      access_level: "read" | "edit"
+    }>((offset, limit) => `/api/permissions?limit=${limit}&offset=${offset}`)
+
+    return rows.map(toTablePermission)
+  }, [])
+
   const refresh = useCallback(async () => {
-    setIsBootstrapping(true)
+    const runId = refreshRunIdRef.current + 1
+    refreshRunIdRef.current = runId
+    if (!hasBootstrappedRef.current) {
+      setIsBootstrapping(true)
+    }
 
     try {
-      const meResponse = await apiFetch<{
-        user: { id: string; email?: string | null }
-        profile: { user_id: string; display_name: string; role: "admin" | "sales" }
-        organization: { id: string; name: string; logo_url?: string | null; logo_signed_url?: string | null }
-      }>("/api/me")
-
-      const meUser = toUser(
-        {
-          user_id: meResponse.profile.user_id,
-          display_name: meResponse.profile.display_name,
-          role: meResponse.profile.role,
-        },
-        meResponse.user.email,
-      )
-
-      setCurrentUser(meUser)
-      setOrg(toOrg(meResponse.organization))
-      setIsAuthenticated(true)
-
-      const [tablesResponse, usersResponse, favoritesResponse] = await Promise.all([
+      const [meResponse, tablesResponse] = await Promise.all([
+        apiFetch<{
+          user: { id: string; email?: string | null }
+          profile: { user_id: string; display_name: string; role: "admin" | "sales" }
+          organization: { id: string; name: string; logo_url?: string | null; logo_signed_url?: string | null }
+        }>("/api/me"),
         fetchAllPages<{
           id: string
           name: string
@@ -327,46 +446,31 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
           default_source_detail: string | null
           access_level: "read" | "edit"
         }>((offset, limit) => `/api/tables?includeArchived=1&limit=${limit}&offset=${offset}`),
-        fetchAllPages<{
-          user_id: string
-          display_name: string
-          role: "admin" | "sales"
-          is_disabled: boolean
-        }>((offset, limit) => `/api/users?limit=${limit}&offset=${offset}`),
-        apiFetch<{ table_ids: string[] }>("/api/favorites/tables"),
       ])
 
+      const meUser = toUser(
+        {
+          user_id: meResponse.profile.user_id,
+          display_name: meResponse.profile.display_name,
+          role: meResponse.profile.role,
+        },
+        meResponse.user.email,
+      )
       const mappedTables = tablesResponse.map(toSalesTable)
-      setTables(mappedTables)
-      setFavorites(favoritesResponse.table_ids ?? [])
+      const allowedTableIds = new Set(mappedTables.map((table) => table.id))
 
-      const mappedUsers = usersResponse.map((user) => toUser(user))
-      const hasCurrent = mappedUsers.some((user) => user.id === meUser.id)
-      const mergedUsers = hasCurrent ? mappedUsers : [meUser, ...mappedUsers]
-      setUsers(mergedUsers)
+      if (runId !== refreshRunIdRef.current) {
+        return
+      }
+
+      setCurrentUser(meUser)
+      setOrg(toOrg(meResponse.organization))
+      setIsAuthenticated(true)
+      setTables(mappedTables)
+      setUsers([meUser])
 
       if (meUser.role === "admin") {
-        const permissionsByTable = await Promise.all(
-          mappedTables.map(async (table) => {
-            const response = await fetchAllPages<{
-              user_id: string
-              access_level: "read" | "edit"
-            }>(
-              (offset, limit) =>
-                `/api/tables/${table.id}/permissions?limit=${limit}&offset=${offset}`,
-            )
-
-            return response.map((entry) =>
-              toTablePermission({
-                table_id: table.id,
-                user_id: entry.user_id,
-                access_level: entry.access_level,
-              }),
-            )
-          }),
-        )
-
-        setPermissions(permissionsByTable.flat())
+        setPermissions([])
       } else {
         setPermissions(
           tablesResponse.map((table) =>
@@ -379,33 +483,100 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
         )
       }
 
-      const tableIds = mappedTables.map((table) => table.id)
+      setServices((prev) => prev.filter((service) => allowedTableIds.has(service.tableId)))
+      setLeads((prev) => prev.filter((lead) => allowedTableIds.has(lead.tableId)))
+      setFavorites((prev) => prev.filter((tableId) => allowedTableIds.has(tableId)))
 
-      const [servicesRows, leadsRows] = await Promise.all([
-        Promise.all(tableIds.map((tableId) => fetchTableServices(tableId))),
-        Promise.all(tableIds.map((tableId) => fetchTableLeads(tableId))),
-      ])
+      tableWorkspaceLoadedRef.current = new Set(
+        [...tableWorkspaceLoadedRef.current].filter((workspaceKey) => {
+          const [tableId] = workspaceKey.split("::")
+          return allowedTableIds.has(tableId ?? "")
+        }),
+      )
+      tableWorkspaceLoadingRef.current.forEach((_promise, workspaceKey) => {
+        const [tableId] = workspaceKey.split("::")
+        if (!allowedTableIds.has(tableId ?? "")) {
+          tableWorkspaceLoadingRef.current.delete(workspaceKey)
+        }
+      })
+      tableWorkspacePayloadRef.current.forEach((_payload, workspaceKey) => {
+        const [tableId] = workspaceKey.split("::")
+        if (!allowedTableIds.has(tableId ?? "")) {
+          tableWorkspacePayloadRef.current.delete(workspaceKey)
+        }
+      })
+      tableServicesLoadedRef.current.forEach((tableId) => {
+        if (!allowedTableIds.has(tableId)) {
+          tableServicesLoadedRef.current.delete(tableId)
+        }
+      })
 
-      setServices(servicesRows.flat())
-      setLeads(leadsRows.flat())
+      void Promise.allSettled([
+        fetchAllPages<{
+          user_id: string
+          display_name: string
+          role: "admin" | "sales"
+          is_disabled: boolean
+        }>((offset, limit) => `/api/users?limit=${limit}&offset=${offset}`),
+        apiFetch<{ table_ids: string[] }>("/api/favorites/tables"),
+        meUser.role === "admin" ? fetchOrgPermissions() : Promise.resolve(null),
+      ]).then((results) => {
+        if (runId !== refreshRunIdRef.current) {
+          return
+        }
+
+        const [usersResult, favoritesResult, permissionsResult] = results
+
+        if (usersResult.status === "fulfilled") {
+          const mappedUsers = usersResult.value.map((user) => toUser(user))
+          const hasCurrent = mappedUsers.some((user) => user.id === meUser.id)
+          const mergedUsers = hasCurrent ? mappedUsers : [meUser, ...mappedUsers]
+          setUsers(mergedUsers)
+        } else {
+          console.error(usersResult.reason)
+          setUsers([meUser])
+        }
+
+        if (favoritesResult.status === "fulfilled") {
+          const visibleFavoriteIds = (favoritesResult.value.table_ids ?? []).filter((tableId) =>
+            allowedTableIds.has(tableId),
+          )
+          setFavorites(visibleFavoriteIds)
+        } else {
+          console.error(favoritesResult.reason)
+          setFavorites([])
+        }
+
+        if (meUser.role === "admin") {
+          if (permissionsResult.status === "fulfilled") {
+            setPermissions(permissionsResult.value ?? [])
+          } else {
+            console.error(permissionsResult.reason)
+          }
+        }
+      })
     } catch (error) {
       if (error instanceof ApiClientError && error.status === 401) {
         resetState()
       } else {
         console.error(error)
-        resetState()
       }
     } finally {
-      setIsBootstrapping(false)
+      if (runId === refreshRunIdRef.current) {
+        hasBootstrappedRef.current = true
+        setIsBootstrapping(false)
+      }
     }
-  }, [fetchTableLeads, fetchTableServices, resetState])
+  }, [fetchOrgPermissions, resetState])
 
   useEffect(() => {
     const supabase = createBrowserSupabaseClient()
     const {
       data: { subscription },
-    } = supabase.auth.onAuthStateChange(() => {
-      void refresh()
+    } = supabase.auth.onAuthStateChange((event: string) => {
+      if (event === "SIGNED_IN" || event === "SIGNED_OUT") {
+        void refresh()
+      }
     })
 
     void refresh()
@@ -481,19 +652,90 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
   }, [currentUser.role, getAccess, tables])
 
   const loadTableWorkspace = useCallback(
-    async (tableId: string) => {
-      const [tableServices, tableLeads] = await Promise.all([
-        fetchTableServices(tableId),
-        fetchTableLeads(tableId),
-      ])
+    async (tableId: string, options?: LoadTableWorkspaceOptions) => {
+      const force = options?.force ?? false
+      const workspaceOptions = getWorkspaceOptions(options)
+      const workspaceKey = getWorkspaceKey(tableId, workspaceOptions)
 
-      setServices((prev) => [
-        ...prev.filter((service) => service.tableId !== tableId),
-        ...tableServices,
-      ])
-      setLeads((prev) => [...prev.filter((lead) => lead.tableId !== tableId), ...tableLeads])
+      if (force) {
+        invalidateTableWorkspaceCache(tableId)
+      }
+
+      const cachedPayload = tableWorkspacePayloadRef.current.get(workspaceKey)
+      if (!force && cachedPayload) {
+        setServices((prev) => [
+          ...prev.filter((service) => service.tableId !== tableId),
+          ...cachedPayload.services,
+        ])
+        setLeads((prev) => [
+          ...prev.filter((lead) => lead.tableId !== tableId),
+          ...cachedPayload.leads,
+        ])
+        tableWorkspaceLoadedRef.current.add(workspaceKey)
+        return
+      }
+
+      if (tableWorkspaceLoadedRef.current.has(workspaceKey)) {
+        return
+      }
+
+      const inFlight = tableWorkspaceLoadingRef.current.get(workspaceKey)
+      if (inFlight) {
+        await inFlight
+        return
+      }
+
+      const request = (async () => {
+        const shouldFetchServices = !tableServicesLoadedRef.current.has(tableId)
+
+        const [fetchedServices, tableLeads] = await Promise.all([
+          shouldFetchServices ? fetchTableServices(tableId) : Promise.resolve<Service[] | null>(null),
+          fetchTableLeads(tableId, workspaceOptions),
+        ])
+
+        const cachedServices = (() => {
+          for (const [cachedWorkspaceKey, payload] of tableWorkspacePayloadRef.current.entries()) {
+            if (workspaceKeyBelongsToTable(cachedWorkspaceKey, tableId) && payload.services.length > 0) {
+              return payload.services
+            }
+          }
+          return [] as Service[]
+        })()
+
+        const tableServices = fetchedServices ?? cachedServices
+
+        if (fetchedServices) {
+          tableServicesLoadedRef.current.add(tableId)
+          setServices((prev) => [
+            ...prev.filter((service) => service.tableId !== tableId),
+            ...fetchedServices,
+          ])
+        }
+
+        tableWorkspacePayloadRef.current.set(workspaceKey, {
+          leads: tableLeads,
+          services: tableServices,
+        })
+        setLeads((prev) => [...prev.filter((lead) => lead.tableId !== tableId), ...tableLeads])
+        tableWorkspaceLoadedRef.current.add(workspaceKey)
+      })()
+
+      tableWorkspaceLoadingRef.current.set(workspaceKey, request)
+
+      try {
+        await request
+      } finally {
+        tableWorkspaceLoadingRef.current.delete(workspaceKey)
+      }
     },
-    [fetchTableLeads, fetchTableServices],
+    [
+      fetchTableLeads,
+      fetchTableServices,
+      getWorkspaceKey,
+      getWorkspaceOptions,
+      invalidateTableWorkspaceCache,
+      workspaceKeyBelongsToTable,
+    ],
   )
 
   const addTable = useCallback(
@@ -552,44 +794,93 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
     setTables((prev) => prev.map((table) => (table.id === id ? mapped : table)))
   }, [])
 
+  const deleteTable = useCallback(async (id: string) => {
+    await apiFetch(`/api/tables/${id}`, {
+      method: "DELETE",
+    })
+
+    const removedLeadIds = new Set(
+      leads.filter((lead) => lead.tableId === id).map((lead) => lead.id),
+    )
+
+    invalidateTableWorkspaceCache(id, { invalidateServices: true })
+    tableServicesLoadedRef.current.delete(id)
+
+    setTables((prev) => prev.filter((table) => table.id !== id))
+    setPermissions((prev) => prev.filter((entry) => entry.tableId !== id))
+    setServices((prev) => prev.filter((service) => service.tableId !== id))
+    setLeads((prev) => prev.filter((lead) => lead.tableId !== id))
+    setFavorites((prev) => prev.filter((tableId) => tableId !== id))
+
+    if (removedLeadIds.size > 0) {
+      setEvents((prev) => prev.filter((event) => !removedLeadIds.has(event.leadId)))
+      setAttachments((prev) =>
+        prev.filter((attachment) => !removedLeadIds.has(attachment.leadId)),
+      )
+    }
+  }, [invalidateTableWorkspaceCache, leads])
+
   const updatePermission = useCallback(
     async (tableId: string, userId: string, access: AccessLevel | null) => {
-      const nextPermissions = (() => {
-        const filtered = permissions.filter(
-          (entry) => !(entry.tableId === tableId && entry.userId === userId),
-        )
+      let tablePermissions = permissions.filter((entry) => entry.tableId === tableId)
+
+      if (tablePermissions.length === 0) {
+        tablePermissions = await fetchTablePermissions(tableId)
+        setPermissions((prev) => [
+          ...prev.filter((entry) => entry.tableId !== tableId),
+          ...tablePermissions,
+        ])
+      }
+
+      const nextTablePermissions = (() => {
+        const filtered = tablePermissions.filter((entry) => entry.userId !== userId)
         if (access === null) return filtered
         return [...filtered, { tableId, userId, access }]
       })()
 
-      setPermissions(nextPermissions)
+      setPermissions((prev) => [
+        ...prev.filter((entry) => entry.tableId !== tableId),
+        ...nextTablePermissions,
+      ])
 
-      const payload = nextPermissions
-        .filter((entry) => entry.tableId === tableId)
+      const payload = nextTablePermissions
         .map((entry) => ({
           user_id: entry.userId,
           access_level: entry.access,
         }))
 
-      const response = await apiFetch<{
-        items: Array<{ user_id: string; access_level: "read" | "edit" }>
-      }>(`/api/tables/${tableId}/permissions`, {
-        method: "PUT",
-        body: JSON.stringify(payload),
-      })
+      try {
+        const response = await apiFetch<{
+          items: Array<{ user_id: string; access_level: "read" | "edit" }>
+        }>(`/api/tables/${tableId}/permissions`, {
+          method: "PUT",
+          body: JSON.stringify(payload),
+        })
 
-      setPermissions((prev) => [
-        ...prev.filter((entry) => entry.tableId !== tableId),
-        ...response.items.map((entry) =>
-          toTablePermission({
-            table_id: tableId,
-            user_id: entry.user_id,
-            access_level: entry.access_level,
-          }),
-        ),
-      ])
+        setPermissions((prev) => [
+          ...prev.filter((entry) => entry.tableId !== tableId),
+          ...response.items.map((entry) =>
+            toTablePermission({
+              table_id: tableId,
+              user_id: entry.user_id,
+              access_level: entry.access_level,
+            }),
+          ),
+        ])
+      } catch (error) {
+        try {
+          const reloadedPermissions = await fetchTablePermissions(tableId)
+          setPermissions((prev) => [
+            ...prev.filter((entry) => entry.tableId !== tableId),
+            ...reloadedPermissions,
+          ])
+        } catch (reloadError) {
+          console.error(reloadError)
+        }
+        throw error
+      }
     },
-    [permissions],
+    [fetchTablePermissions, permissions],
   )
 
   const flushLeadUpdate = useCallback(async (leadId: string) => {
@@ -628,6 +919,7 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
           is_archived: boolean
           stage_changed_at: string
           created_at: string
+          lead_services?: Array<{ service_id: string }>
         }
       }>(`/api/leads/${leadId}`, {
         method: "PATCH",
@@ -639,8 +931,23 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
           ? pendingUpdates.interestedServices
           : undefined
 
-      const mapped = toLead(response.item, serviceIds)
-      setLeads((prev) => prev.map((lead) => (lead.id === leadId ? mapped : lead)))
+      setLeads((prev) =>
+        prev.map((lead) => {
+          if (lead.id !== leadId) {
+            return lead
+          }
+
+          const responseServiceIds = response.item.lead_services?.map(
+            (service) => service.service_id,
+          )
+
+          const resolvedServiceIds =
+            serviceIds ?? responseServiceIds ?? lead.interestedServices
+
+          return toLead(response.item, resolvedServiceIds)
+        }),
+      )
+      invalidateTableWorkspaceCache(response.item.table_id)
     } catch (error) {
       if (error instanceof ApiClientError) {
         toast.error(error.message)
@@ -691,7 +998,7 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
         console.error(reloadError)
       }
     }
-  }, [])
+  }, [invalidateTableWorkspaceCache])
 
   const updateLead = useCallback(
     (id: string, updates: Partial<Lead>) => {
@@ -813,6 +1120,7 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
         is_archived: boolean
         stage_changed_at: string
         created_at: string
+        lead_services?: Array<{ service_id: string }>
       }
     }>(`/api/leads/${id}`, {
       method: "PATCH",
@@ -822,9 +1130,24 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
     const serviceIds =
       "interestedServices" in preparedUpdates ? preparedUpdates.interestedServices : undefined
 
-    const mapped = toLead(response.item, serviceIds)
-    setLeads((prev) => prev.map((lead) => (lead.id === id ? mapped : lead)))
-  }, [leads])
+    setLeads((prev) =>
+      prev.map((lead) => {
+        if (lead.id !== id) {
+          return lead
+        }
+
+        const responseServiceIds = response.item.lead_services?.map(
+          (service) => service.service_id,
+        )
+
+        const resolvedServiceIds =
+          serviceIds ?? responseServiceIds ?? lead.interestedServices
+
+        return toLead(response.item, resolvedServiceIds)
+      }),
+    )
+    invalidateTableWorkspaceCache(response.item.table_id)
+  }, [invalidateTableWorkspaceCache, leads])
 
   const addLead = useCallback(async (lead: Lead) => {
     const response = await apiFetch<{
@@ -856,7 +1179,8 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
 
     const mapped = toLead(response.item, lead.interestedServices)
     setLeads((prev) => [mapped, ...prev])
-  }, [])
+    invalidateTableWorkspaceCache(response.item.table_id)
+  }, [invalidateTableWorkspaceCache])
 
   const claimLead = useCallback(async (leadId: string, ownerId?: string) => {
     const response = await apiFetch<{
@@ -889,7 +1213,8 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
     setLeads((prev) =>
       prev.map((lead) => (lead.id === leadId ? toLead(response.item, lead.interestedServices) : lead)),
     )
-  }, [])
+    invalidateTableWorkspaceCache(response.item.table_id)
+  }, [invalidateTableWorkspaceCache])
 
   const logTouchLead = useCallback(
     async (leadId: string, note?: string) => {
@@ -923,8 +1248,9 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
       setLeads((prev) =>
         prev.map((lead) => (lead.id === leadId ? toLead(response.item, lead.interestedServices) : lead)),
       )
+      invalidateTableWorkspaceCache(response.item.table_id)
     },
-    [],
+    [invalidateTableWorkspaceCache],
   )
 
   const archiveLead = useCallback(async (leadId: string) => {
@@ -957,7 +1283,8 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
     setLeads((prev) =>
       prev.map((lead) => (lead.id === leadId ? toLead(response.item, lead.interestedServices) : lead)),
     )
-  }, [])
+    invalidateTableWorkspaceCache(response.item.table_id)
+  }, [invalidateTableWorkspaceCache])
 
   const restoreLead = useCallback(async (leadId: string) => {
     const response = await apiFetch<{
@@ -989,7 +1316,8 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
     setLeads((prev) =>
       prev.map((lead) => (lead.id === leadId ? toLead(response.item, lead.interestedServices) : lead)),
     )
-  }, [])
+    invalidateTableWorkspaceCache(response.item.table_id)
+  }, [invalidateTableWorkspaceCache])
 
   const runBulkAction = useCallback(
     async (tableId: string, payload: BulkActionInput) => {
@@ -998,7 +1326,7 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
         body: JSON.stringify(payload),
       })
 
-      await loadTableWorkspace(tableId)
+      await loadTableWorkspace(tableId, { force: true })
     },
     [loadTableWorkspace],
   )
@@ -1015,7 +1343,8 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
 
     const mapped = toService(response.item)
     setServices((prev) => [...prev, mapped])
-  }, [])
+    invalidateTableWorkspaceCache(service.tableId, { invalidateServices: true })
+  }, [invalidateTableWorkspaceCache])
 
   const updateService = useCallback(
     async (id: string, updates: Partial<Service>) => {
@@ -1034,9 +1363,32 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
 
       const mapped = toService(response.item)
       setServices((prev) => prev.map((entry) => (entry.id === id ? mapped : entry)))
+      invalidateTableWorkspaceCache(service.tableId, { invalidateServices: true })
     },
-    [services],
+    [invalidateTableWorkspaceCache, services],
   )
+
+  const deleteService = useCallback(async (id: string) => {
+    const service = services.find((entry) => entry.id === id)
+    if (!service) return
+
+    await apiFetch(`/api/tables/${service.tableId}/services/${id}`, {
+      method: "DELETE",
+    })
+
+    setServices((prev) => prev.filter((entry) => entry.id !== id))
+    setLeads((prev) =>
+      prev.map((lead) =>
+        lead.interestedServices.includes(id)
+          ? {
+              ...lead,
+              interestedServices: lead.interestedServices.filter((serviceId) => serviceId !== id),
+            }
+          : lead,
+      ),
+    )
+    invalidateTableWorkspaceCache(service.tableId, { invalidateServices: true })
+  }, [invalidateTableWorkspaceCache, services])
 
   const toggleFavorite = useCallback(
     async (tableId: string) => {
@@ -1233,6 +1585,7 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
     tables,
     addTable,
     updateTable,
+    deleteTable,
     loadTableWorkspace,
     permissions,
     updatePermission,
@@ -1250,6 +1603,7 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
     services,
     addService,
     updateService,
+    deleteService,
     favorites,
     toggleFavorite,
     events,

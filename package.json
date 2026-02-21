@@ -6,7 +6,8 @@
     "dev": "next dev --turbo",
     "build": "next build",
     "start": "next start",
-    "lint": "next lint",
+    "lint": "eslint . --max-warnings=0",
+    "lint:fix": "eslint . --fix",
     "seed": "node scripts/seed.mjs",
     "db:reset:local": "bash scripts/db-reset-local.sh",
     "db:push": "supabase db push",
@@ -68,10 +69,13 @@
     "zod": "^3.24.1"
   },
   "devDependencies": {
+    "@eslint/eslintrc": "^3.3.1",
     "@tailwindcss/postcss": "^4.1.13",
     "@types/node": "^22",
     "@types/react": "19.2.7",
     "@types/react-dom": "19.2.3",
+    "eslint": "^9.38.0",
+    "eslint-config-next": "16.1.6",
     "postcss": "^8.5",
     "tailwindcss": "^3.4.17",
     "typescript": "5.7.3"
